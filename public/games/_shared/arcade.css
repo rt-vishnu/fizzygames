@@ -122,6 +122,18 @@ canvas { display: block; }
 .pp-overlay[hidden] { display: none; }
 .pp-overlay > div { width: min(560px, 100%); }
 
+/* Safety net: a 16:9 game embedded at phone width can still land in a very
+   short iframe (e.g. a min-height override that doesn't quite cover an
+   overlay with extra content). Shrink the chrome so the play button never
+   needs a scroll to reach, independent of any host-page sizing fix. */
+@media (max-height: 360px) {
+  .pp-overlay { padding: 10px; }
+  .pp-title { font-size: clamp(20px, 6vw, 30px); margin-bottom: 2px; }
+  .pp-sub { margin: 2px 0 8px; font-size: 12px; line-height: 1.4; }
+  .pp-btn { padding: 9px 22px; }
+  .pp-stats { margin: 8px 0; gap: 6px; }
+}
+
 .pp-title {
   margin: 0 0 4px;
   font-size: clamp(30px, 7vw, 50px);

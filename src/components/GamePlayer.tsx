@@ -109,7 +109,11 @@ export default function GamePlayer({ game }: { game: Game }) {
     <div className="overflow-hidden rounded-3xl bg-canvas ring-1 ring-line">
       <div
         ref={wrapRef}
-        className="relative w-full bg-canvas-soft"
+        // Below sm, a 16:9 game at phone width is only ~200px tall — too
+        // short for the in-game start overlay to fit, clipping its play
+        // button below the fold. Floor the height on small screens; aspect
+        // ratio takes back over once there's width to spare.
+        className="relative w-full min-h-[420px] bg-canvas-soft sm:min-h-0"
         style={{ aspectRatio: ASPECT_RATIO[game.aspect] }}
       >
         {started ? (
