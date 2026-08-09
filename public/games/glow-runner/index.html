@@ -33,6 +33,13 @@
   <div class="cluster"><button id="tl">◀</button><button id="tr">▶</button></div>
   <div class="cluster"><button id="tj">▲</button></div>
 </div>
+<!-- Keyboard players get R/Esc for restart and level select. Touch has
+     neither key, so without this a phone player who starts a level has no
+     way back to the menu short of reloading the page. -->
+<button id="menuBtn" class="pp-btn ghost" hidden
+  style="position:fixed; top:10px; right:10px; z-index:6; padding:8px 12px; font-size:13px;">
+  ☰ Menu
+</button>
 
 <div class="pp-overlay" id="overlay">
   <div>
@@ -40,7 +47,7 @@
     <p class="pp-sub" id="msg">
       Find the key, open the door, don't touch the spikes.
     </p>
-    <p class="pp-sub">
+    <p class="pp-sub" id="controlsHint">
       <span class="pp-kbd">←</span><span class="pp-kbd">→</span> run ·
       <span class="pp-kbd">space</span> jump (hold for height) ·
       <span class="pp-kbd">R</span> restart · <span class="pp-kbd">Esc</span> level select
@@ -288,6 +295,9 @@
 
   if (P.isTouch) {
     document.getElementById("touch").classList.add("on");
+    document.getElementById("menuBtn").hidden = false;
+    document.getElementById("controlsHint").textContent =
+      "◀ ▶ run · ▲ jump (hold for height) · ☰ menu to restart or change level";
     input.bind(document.getElementById("tl"), "left");
     input.bind(document.getElementById("tr"), "right");
     input.bind(document.getElementById("tj"), "jump");
@@ -857,7 +867,7 @@
     ctx.fillRect(12, H - 13, (W - 24) * frac, 4);
     ctx.fillStyle = "#868685";
     ctx.font = "700 11px system-ui";
-    ctx.fillText(level.name + "  ·  R to restart", 12, H - 18);
+    ctx.fillText(level.name + (P.isTouch ? "" : "  ·  R to restart"), 12, H - 18);
   }
 
   /* ================================================================== *
@@ -866,8 +876,8 @@
 
   var loop = P.loop(step, render);
 
-  window.addEventListener("keydown", function (e) {
-    if (e.key !== "Escape" || !running) return;
+  function openMenu() {
+    if (!running) return;
     running = false;
     loop.stop();
     document.querySelector("#overlay .pp-title").textContent = "Glow Runner";
@@ -875,7 +885,12 @@
     document.getElementById("finalStats").innerHTML = "";
     renderLevelSelect();
     document.getElementById("overlay").hidden = false;
+  }
+
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") openMenu();
   });
+  document.getElementById("menuBtn").addEventListener("click", openMenu);
 
   loadLevel(0);
   loop.stop();

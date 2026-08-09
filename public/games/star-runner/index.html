@@ -26,7 +26,7 @@
 
 <div class="pp-touch" id="touch">
   <div class="cluster"><button id="bl">◀</button><button id="br">▶</button></div>
-  <div class="cluster"><button id="bt">▲</button><button id="bf">🔥</button></div>
+  <div class="cluster"><button id="bt">▲</button><button id="bf">🔥</button><button id="bb">💣</button></div>
 </div>
 
 <div class="pp-overlay" id="shopScreen" hidden>
@@ -43,7 +43,7 @@
   <div>
     <h1 class="pp-title">Star Runner</h1>
     <p class="pp-sub" id="msg">Split the asteroids. Spend the salvage. Watch for hunters.</p>
-    <p class="pp-sub">
+    <p class="pp-sub" id="controlsHint">
       <span class="pp-kbd">←</span><span class="pp-kbd">→</span> rotate ·
       <span class="pp-kbd">↑</span> thrust · <span class="pp-kbd">space</span> fire ·
       <span class="pp-kbd">X</span> bomb
@@ -87,10 +87,13 @@
   var input = P.input({ x: "bomb", X: "bomb" });
   if (P.isTouch) {
     document.getElementById("touch").classList.add("on");
+    document.getElementById("controlsHint").textContent =
+      "◀ ▶ rotate · ▲ thrust · 🔥 fire · 💣 bomb";
     input.bind(document.getElementById("bl"), "left");
     input.bind(document.getElementById("br"), "right");
     input.bind(document.getElementById("bt"), "up");
     input.bind(document.getElementById("bf"), "fire");
+    input.bind(document.getElementById("bb"), "bomb");
   }
 
   P.hud({ score: "Score", wave: "Wave", lives: "Lives", bombs: "Bombs", salvage: "Salvage" });
