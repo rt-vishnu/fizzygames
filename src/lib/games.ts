@@ -54,8 +54,10 @@ export type Game = {
   flagship?: boolean;
   controls: string;
   achievements?: Achievement[];
-  /** Two hex stops used for the generated thumbnail + accent colour. */
+  /** Two hex stops used for accent colour and procedural fallback art. */
   art: [string, string];
+  /** Cover image served from `/public` (e.g. `/thumbs/void-arena.webp`). */
+  thumbnail: string;
 };
 
 export const CATEGORIES: Category[] = [
@@ -148,6 +150,7 @@ export const GAMES: Game[] = [
       { id: "survive-5", name: "Long Haul", hint: "Survive five minutes", icon: "⏱️" },
     ],
     art: ["#38c8ff", "#054d28"],
+    thumbnail: "/thumbs/void-arena.webp",
   },
   {
     slug: "iron-line",
@@ -178,6 +181,7 @@ export const GAMES: Game[] = [
       { id: "maxed", name: "Overengineered", hint: "Fully specialise a tower", icon: "🔧" },
     ],
     art: ["#9fe870", "#054d28"],
+    thumbnail: "/thumbs/iron-line.webp",
   },
   {
     slug: "glow-runner",
@@ -208,6 +212,7 @@ export const GAMES: Game[] = [
       { id: "par-time", name: "Quick Feet", hint: "Beat a level's par time", icon: "⚡" },
     ],
     art: ["#ffc091", "#2ead4b"],
+    thumbnail: "/thumbs/glow-runner.webp",
   },
   {
     slug: "apex-drift",
@@ -238,6 +243,7 @@ export const GAMES: Game[] = [
       { id: "garage", name: "Collector", hint: "Unlock every car", icon: "🔑" },
     ],
     art: ["#ffd11a", "#b86700"],
+    thumbnail: "/thumbs/apex-drift.webp",
   },
 
   /* ---------------------------------------------------------------- *
@@ -269,6 +275,7 @@ export const GAMES: Game[] = [
       { id: "combo-8", name: "Chain Eater", hint: "Land an 8-pellet combo", icon: "🔗" },
     ],
     art: ["#cdffad", "#2ead4b"],
+    thumbnail: "/thumbs/neon-serpent.webp",
   },
   {
     slug: "brick-blitz",
@@ -296,6 +303,7 @@ export const GAMES: Game[] = [
       { id: "multiball-5", name: "Juggler", hint: "Have five balls in play", icon: "🤹" },
     ],
     art: ["#ffc091", "#d03238"],
+    thumbnail: "/thumbs/brick-blitz.webp",
   },
   {
     slug: "merge-2048",
@@ -323,6 +331,7 @@ export const GAMES: Game[] = [
       { id: "no-undo", name: "No Take-Backs", hint: "Reach 512 without an undo", icon: "🚫" },
     ],
     art: ["#ffd11a", "#ffc091"],
+    thumbnail: "/thumbs/merge-2048.webp",
   },
   {
     slug: "star-runner",
@@ -350,6 +359,7 @@ export const GAMES: Game[] = [
       { id: "hunter-10", name: "Dogfighter", hint: "Destroy ten hunters", icon: "🎯" },
     ],
     art: ["#38c8ff", "#a72027"],
+    thumbnail: "/thumbs/star-runner.webp",
   },
   {
     slug: "lane-rush",
@@ -377,6 +387,7 @@ export const GAMES: Game[] = [
       { id: "night", name: "After Dark", hint: "Drive into the night stage", icon: "🌙" },
     ],
     art: ["#d03238", "#4a3b1c"],
+    thumbnail: "/thumbs/lane-rush.webp",
   },
   {
     slug: "jet-hopper",
@@ -404,6 +415,7 @@ export const GAMES: Game[] = [
       { id: "perfect-5", name: "Dead Centre", hint: "Five perfect gaps in a row", icon: "🎯" },
     ],
     art: ["#cdffad", "#38c8ff"],
+    thumbnail: "/thumbs/jet-hopper.webp",
   },
   {
     slug: "memory-vault",
@@ -431,6 +443,7 @@ export const GAMES: Game[] = [
       { id: "beat-clock", name: "Against The Clock", hint: "Win a timed round", icon: "⏰" },
     ],
     art: ["#9fe870", "#2ead4b"],
+    thumbnail: "/thumbs/memory-vault.webp",
   },
   {
     slug: "tic-tac-tactics",
@@ -458,6 +471,7 @@ export const GAMES: Game[] = [
       { id: "streak-3", name: "On A Run", hint: "Win three games in a row", icon: "🔥" },
     ],
     art: ["#e2f6d5", "#b86700"],
+    thumbnail: "/thumbs/tic-tac-tactics.webp",
   },
 ];
 
