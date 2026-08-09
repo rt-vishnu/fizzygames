@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en" data-game="pitch-rush">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Pitch Rush</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #38c8ff; --g2: #2ead4b; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div class="pp-touch" id="touch">
+  <div class="cluster"><button id="tl">◀</button><button id="tu">▲</button><button id="td">▼</button><button id="tr">▶</button></div>
+  <div class="cluster"><button id="kick">Kick</button></div>
+</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Pitch Rush</h1>
+    <p class="pp-sub" id="msg">60 seconds on the pitch. Dribble, shoot, beat the keeper.</p>
+    <p class="pp-sub">
+      <span class="pp-kbd">WASD</span>/<span class="pp-kbd">arrows</span> move ·
+      <span class="pp-kbd">space</span> kick
+    </p>
+    <div id="finalStats"></div>
+    <p></p>
+    <button class="pp-btn" id="go">Kick off</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var W = 640, H = 480;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+  var input = P.input();
+
+  if (P.isTouch) {
+    document.getElementById("touch").classList.add("on");
+    input.bind(document.getElementById("tl"), "left");
+    input.bind(document.getElementById("tr"), "right");
+    input.bind(document.getElementById("tu"), "up");
+    input.bind(document.getElementById("td"), "down");
+    input.bind(document.getElementById("kick"), "fire");
+  }
+
+  P.hud({ goals: "Goals", time: "Time", shots: "Shots", possession: "Ball" });
+
+  var player, keeper, ball, particles;
+  var goals, shots, timeLeft, running, freezeT, possession;
+  var FIELD = { x: 40, y: 30, w: W - 80, h: H - 60 };
+
+  function reset() {
+    player = { x: W * 0.35, y: H * 0.55, r: 14, speed: 210 };
+    keeper = { x: W - 78, y: H / 2, r: 15, speed: 160, dir: 1 };
+    ball = { x: player.x + 18, y: player.y, r: 8, vx: 0, vy: 0, free: false };
+    particles = [];
+    goals = 0; shots = 0; timeLeft = 60; freezeT = 0; possession = true;
+    running = true;
+    syncHUD();
+  }
+
+  function syncHUD() {
+    P.set({
+      goals: String(goals),
+      time: Math.ceil(timeLeft) + "s",
+      shots: String(shots),
+      possession: possession ? "You" : "Loose"
+    });
+  }
+
+  function kick() {
+    if (!running || freezeT > 0) return;
+    if (!possession) return;
+    var dx = 1, dy = 0;
+    if (input.down("up")) dy -= 1;
+    if (input.down("down")) dy += 1;
+    if (input.down("left")) dx -= 0.35;
+    if (input.down("right")) dx += 1;
+    var len = Math.sqrt(dx * dx + dy * dy) || 1;
+    dx /= len; dy /= len;
+    ball.free = true;
+    possession = false;
+    ball.vx = dx * P.rand(320, 420);
+    ball.vy = dy * P.rand(220, 340);
+    shots++;
+    sfx.play(300, 0.07, "square", 0.045);
+    syncHUD();
+  }
+
+  function scoreGoal() {
+    goals++;
+    freezeT = 0.9;
+    sfx.play(700, 0.1, "triangle", 0.05);
+    sfx.play(980, 0.12, "square", 0.04);
+    P.toast("⚽", "Goal!", goals + " so far");
+    if (goals >= 3) P.achieve("goals-3", "Match Winner", "Score 3 goals in one match");
+    if (goals >= 5) P.achieve("goals-5", "Hat-trick Plus", "Score 5 goals in one match");
+    for (var i = 0; i < 18; i++) {
+      particles.push({
+        x: FIELD.x + FIELD.w - 20, y: H / 2,
+        vx: P.rand(-220, -40), vy: P.rand(-180, 180),
+        life: P.rand(0.4, 0.9), max: 0.9
+      });
+    }
+    // Reset positions
+    player.x = W * 0.35; player.y = H * 0.55;
+    ball.x = player.x + 18; ball.y = player.y;
+    ball.vx = 0; ball.vy = 0; ball.free = false; possession = true;
+    keeper.y = H / 2;
+    syncHUD();
+  }
+
+  function endMatch() {
+    running = false;
+    loop.stop();
+    var score = goals * 1000 + shots * 5 + Math.round(timeLeft) * 2;
+    var res = P.run(score, { goals: goals, shots: shots });
+    document.querySelector("#overlay .pp-title").textContent = "Full time";
+    document.getElementById("msg").textContent = res.isBest
+      ? "New personal best match."
+      : "Best so far: " + P.commas(res.best) + ".";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      '<div><span>Score</span><b>' + P.commas(score) + '</b></div>' +
+      '<div><span>Goals</span><b>' + goals + '</b></div>' +
+      '<div><span>Shots</span><b>' + shots + '</b></div>' +
+      '<div><span>Best</span><b>' + P.commas(res.best) + '</b></div>' +
+      "</div>";
+    document.getElementById("go").textContent = "Rematch";
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function step(dt) {
+    if (!running) return;
+
+    if (freezeT > 0) {
+      freezeT -= dt;
+      return;
+    }
+
+    timeLeft -= dt;
+    if (timeLeft <= 0) {
+      timeLeft = 0;
+      endMatch();
+      return;
+    }
+
+    if (input.pressed("fire")) kick();
+
+    var mx = 0, my = 0;
+    if (input.down("left")) mx -= 1;
+    if (input.down("right")) mx += 1;
+    if (input.down("up")) my -= 1;
+    if (input.down("down")) my += 1;
+    if (mx || my) {
+      var mlen = Math.sqrt(mx * mx + my * my);
+      player.x += (mx / mlen) * player.speed * dt;
+      player.y += (my / mlen) * player.speed * dt;
+    }
+    player.x = P.clamp(player.x, FIELD.x + player.r, FIELD.x + FIELD.w - player.r - 70);
+    player.y = P.clamp(player.y, FIELD.y + player.r, FIELD.y + FIELD.h - player.r);
+
+    // Keeper patrol + react to ball
+    var targetY = ball.y;
+    if (!ball.free) targetY = H / 2 + Math.sin(Date.now() / 400) * 40;
+    keeper.y = P.lerp(keeper.y, targetY, dt * 3.2);
+    keeper.y = P.clamp(keeper.y, FIELD.y + 50, FIELD.y + FIELD.h - 50);
+
+    if (possession && !ball.free) {
+      ball.x = player.x + 16;
+      ball.y = player.y;
+    } else {
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+      ball.vx *= Math.pow(0.985, dt * 60);
+      ball.vy *= Math.pow(0.985, dt * 60);
+
+      // Walls
+      if (ball.x - ball.r < FIELD.x) { ball.x = FIELD.x + ball.r; ball.vx *= -0.6; }
+      if (ball.y - ball.r < FIELD.y) { ball.y = FIELD.y + ball.r; ball.vy *= -0.7; }
+      if (ball.y + ball.r > FIELD.y + FIELD.h) { ball.y = FIELD.y + FIELD.h - ball.r; ball.vy *= -0.7; }
+
+      // Goal mouth (right)
+      var goalTop = H / 2 - 52, goalBot = H / 2 + 52;
+      if (ball.x + ball.r >= FIELD.x + FIELD.w - 8) {
+        if (ball.y > goalTop && ball.y < goalBot) {
+          scoreGoal();
+        } else {
+          ball.x = FIELD.x + FIELD.w - 8 - ball.r;
+          ball.vx *= -0.55;
+        }
+      }
+
+      // Keeper save
+      var kdx = ball.x - keeper.x, kdy = ball.y - keeper.y;
+      if (kdx * kdx + kdy * kdy < (keeper.r + ball.r) * (keeper.r + ball.r)) {
+        ball.vx = -Math.abs(ball.vx) * 0.7 - 40;
+        ball.vy += (ball.y - keeper.y) * 8;
+        sfx.play(180, 0.08, "triangle", 0.04);
+      }
+
+      // Pickup
+      var pdx = ball.x - player.x, pdy = ball.y - player.y;
+      if (pdx * pdx + pdy * pdy < (player.r + ball.r + 4) * (player.r + ball.r + 4) &&
+          Math.hypot(ball.vx, ball.vy) < 90) {
+        possession = true;
+        ball.free = false;
+        ball.vx = 0; ball.vy = 0;
+        syncHUD();
+      }
+
+      if (Math.hypot(ball.vx, ball.vy) < 12 && ball.free) {
+        ball.vx = 0; ball.vy = 0;
+      }
+    }
+
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    if (Math.floor(timeLeft) !== Math.floor(timeLeft + dt)) syncHUD();
+    else if ((Math.random() < 0.05)) syncHUD();
+  }
+
+  function drawField() {
+    ctx.fillStyle = "#1f7a34";
+    ctx.fillRect(0, 0, W, H);
+    // Stripes
+    for (var i = 0; i < 8; i++) {
+      ctx.fillStyle = i % 2 ? "#1f7a34" : "#246f36";
+      ctx.fillRect(FIELD.x + (FIELD.w / 8) * i, FIELD.y, FIELD.w / 8, FIELD.h);
+    }
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(FIELD.x, FIELD.y, FIELD.w, FIELD.h);
+    // Halfway
+    ctx.beginPath();
+    ctx.moveTo(W / 2, FIELD.y);
+    ctx.lineTo(W / 2, FIELD.y + FIELD.h);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(W / 2, H / 2, 48, 0, Math.PI * 2);
+    ctx.stroke();
+    // Penalty box
+    ctx.strokeRect(FIELD.x + FIELD.w - 110, H / 2 - 90, 110, 180);
+    // Goal
+    ctx.fillStyle = "rgba(255,255,255,0.25)";
+    ctx.fillRect(FIELD.x + FIELD.w - 6, H / 2 - 52, 14, 104);
+    ctx.strokeStyle = "#fff";
+    ctx.strokeRect(FIELD.x + FIELD.w - 6, H / 2 - 52, 14, 104);
+  }
+
+  function drawPlayer(p, color, isKeeper) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(p.x - 3, p.y - 3, 3, 0, Math.PI * 2);
+    ctx.arc(p.x + 4, p.y - 2, 3, 0, Math.PI * 2);
+    ctx.fill();
+    if (isKeeper) {
+      ctx.strokeStyle = "#ffd11a";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r + 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function render() {
+    drawField();
+    drawPlayer(keeper, "#ffc091", true);
+    drawPlayer(player, "#38c8ff", false);
+
+    // Ball
+    ctx.fillStyle = "#f4f4f4";
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#222";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      ctx.globalAlpha = p.life / p.max;
+      ctx.fillStyle = "#ffd11a";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  var loop = P.loop(step, render);
+
+  document.getElementById("go").addEventListener("click", function () {
+    document.getElementById("overlay").hidden = true;
+    reset();
+    loop.start();
+  });
+})();
+</script>
+</body>
+</html>

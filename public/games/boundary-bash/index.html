@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en" data-game="boundary-bash">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Boundary Bash</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #2ead4b; --g2: #054d28; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div class="pp-touch" id="touch">
+  <div class="cluster"><button id="swing">🏏 Swing</button></div>
+</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Boundary Bash</h1>
+    <p class="pp-sub" id="msg">Time your swing. Ones, fours, sixes — don't get bowled.</p>
+    <p class="pp-sub">
+      <span class="pp-kbd">space</span> / click to swing · three wickets
+    </p>
+    <div id="finalStats"></div>
+    <p></p>
+    <button class="pp-btn" id="go">Bat</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var W = 640, H = 480;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+  var input = P.input();
+
+  if (P.isTouch) {
+    document.getElementById("touch").classList.add("on");
+    input.bind(document.getElementById("swing"), "fire");
+  }
+
+  P.hud({ runs: "Runs", wickets: "Wickets", balls: "Balls", streak: "Boundary" });
+
+  var state, ball, batAngle, swingT, resultFlash, flashT;
+  var runs, wickets, balls, streak, sixes, fours, bestStreak;
+  var running, waiting, deliverySpeed, pitchTarget;
+  var pointerSwing = false;
+
+  canvas.addEventListener("pointerdown", function () { pointerSwing = true; });
+
+  function reset() {
+    runs = 0; wickets = 0; balls = 0; streak = 0; sixes = 0; fours = 0; bestStreak = 0;
+    batAngle = -0.55; swingT = 0; resultFlash = ""; flashT = 0;
+    running = true; waiting = false;
+    deliverySpeed = 1;
+    nextDelivery();
+    syncHUD();
+  }
+
+  function syncHUD() {
+    P.set({
+      runs: String(runs),
+      wickets: wickets + "/3",
+      balls: String(balls),
+      streak: String(streak)
+    });
+  }
+
+  function nextDelivery() {
+    state = "bowl";
+    waiting = false;
+    pitchTarget = P.rand(0.28, 0.72);
+    ball = {
+      x: W * 0.18,
+      y: 70,
+      t: 0,
+      speed: 0.72 + deliverySpeed * 0.08 + Math.random() * 0.06,
+      swung: false,
+      hit: false
+    };
+    batAngle = -0.55;
+    swingT = 0;
+  }
+
+  function swing() {
+    if (!running || state !== "bowl" || ball.swung) return;
+    ball.swung = true;
+    swingT = 0.22;
+    var timing = ball.t; // 0..1 along flight; sweet ~0.78–0.92 near bat
+    var err = Math.abs(timing - 0.85);
+    var outcome;
+
+    if (timing < 0.55) {
+      outcome = "miss";
+    } else if (err < 0.035) {
+      outcome = "six";
+    } else if (err < 0.07) {
+      outcome = "four";
+    } else if (err < 0.12) {
+      outcome = Math.random() < 0.55 ? "two" : "one";
+    } else if (err < 0.18) {
+      outcome = Math.random() < 0.45 ? "one" : "out";
+    } else {
+      outcome = Math.random() < 0.35 ? "one" : "out";
+    }
+
+    resolve(outcome);
+  }
+
+  function resolve(outcome) {
+    balls++;
+    state = "result";
+    waiting = true;
+    var delay = 0.85;
+
+    if (outcome === "six") {
+      runs += 6; sixes++; streak++;
+      if (streak > bestStreak) bestStreak = streak;
+      resultFlash = "SIX!"; flashT = 0.9;
+      sfx.play(880, 0.12, "triangle", 0.06);
+      sfx.play(1320, 0.08, "square", 0.04);
+      if (sixes >= 5) P.achieve("sixes-5", "Sky High", "Hit five sixes in one innings");
+      if (streak >= 4) P.achieve("boundary-4", "Boundary Machine", "Four boundaries in a row");
+    } else if (outcome === "four") {
+      runs += 4; fours++; streak++;
+      if (streak > bestStreak) bestStreak = streak;
+      resultFlash = "FOUR"; flashT = 0.75;
+      sfx.play(740, 0.1, "triangle", 0.05);
+      if (streak >= 4) P.achieve("boundary-4", "Boundary Machine", "Four boundaries in a row");
+    } else if (outcome === "two") {
+      runs += 2; streak = 0;
+      resultFlash = "2 RUNS"; flashT = 0.6;
+      sfx.play(520, 0.06, "sine", 0.04);
+    } else if (outcome === "one") {
+      runs += 1; streak = 0;
+      resultFlash = "1 RUN"; flashT = 0.55;
+      sfx.play(440, 0.05, "sine", 0.035);
+    } else if (outcome === "miss") {
+      streak = 0;
+      // Dot ball — no wicket unless very late swing into stumps zone
+      if (ball.t > 0.92 && Math.random() < 0.4) {
+        wickets++;
+        resultFlash = "BOWLED!";
+        flashT = 1;
+        sfx.play(140, 0.25, "sawtooth", 0.06);
+      } else {
+        resultFlash = "DOT";
+        flashT = 0.5;
+        sfx.play(200, 0.08, "triangle", 0.03);
+      }
+    } else {
+      wickets++; streak = 0;
+      resultFlash = "OUT!";
+      flashT = 1;
+      sfx.play(120, 0.28, "sawtooth", 0.06);
+    }
+
+    if (runs >= 50) P.achieve("fifty", "Half Century", "Score 50 runs in one innings");
+
+    syncHUD();
+
+    if (wickets >= 3) {
+      setTimeout(endInnings, 700);
+      return;
+    }
+
+    deliverySpeed = Math.min(3.2, 1 + balls * 0.045);
+    setTimeout(function () {
+      if (!running) return;
+      nextDelivery();
+    }, delay * 1000);
+  }
+
+  function autoBowl() {
+    // Missed swing entirely — ball hits pads/stumps
+    if (ball.swung) return;
+    ball.swung = true;
+    balls++;
+    wickets++;
+    streak = 0;
+    resultFlash = "BOWLED!";
+    flashT = 1;
+    state = "result";
+    waiting = true;
+    sfx.play(110, 0.3, "sawtooth", 0.06);
+    syncHUD();
+    if (wickets >= 3) {
+      setTimeout(endInnings, 700);
+      return;
+    }
+    deliverySpeed = Math.min(3.2, 1 + balls * 0.045);
+    setTimeout(function () {
+      if (!running) return;
+      nextDelivery();
+    }, 900);
+  }
+
+  function endInnings() {
+    running = false;
+    loop.stop();
+    var res = P.run(runs, { balls: balls, sixes: sixes, fours: fours, streak: bestStreak });
+    document.querySelector("#overlay .pp-title").textContent = "Innings over";
+    document.getElementById("msg").textContent = res.isBest
+      ? "New personal best innings."
+      : "Best so far: " + P.commas(res.best) + " runs.";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      stat("Runs", runs) +
+      stat("Balls", balls) +
+      stat("Sixes", sixes) +
+      stat("Fours", fours) +
+      stat("Best", P.commas(res.best)) +
+      "</div>";
+    document.getElementById("go").textContent = "Bat again";
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function stat(l, v) {
+    return '<div><span>' + l + '</span><b>' + v + '</b></div>';
+  }
+
+  function step(dt) {
+    if (!running) return;
+
+    if (input.pressed("fire") || pointerSwing) {
+      pointerSwing = false;
+      swing();
+    }
+
+    if (flashT > 0) flashT -= dt;
+
+    if (state === "bowl" && ball) {
+      ball.t += ball.speed * dt;
+      // Arc from bowler to batsman crease
+      var t = P.clamp(ball.t, 0, 1.15);
+      var x0 = W * 0.2, y0 = 78;
+      var x1 = W * 0.72, y1 = H * 0.62;
+      var lift = Math.sin(Math.min(t, 1) * Math.PI) * (55 - deliverySpeed * 6);
+      ball.x = P.lerp(x0, x1, Math.min(t, 1));
+      ball.y = P.lerp(y0, y1, Math.min(t, 1)) - lift;
+      // lateral drift toward pitch line
+      ball.x += (pitchTarget - 0.5) * 40 * Math.min(t, 1);
+
+      if (swingT > 0) {
+        swingT -= dt;
+        batAngle = P.lerp(-0.55, 0.85, 1 - swingT / 0.22);
+      }
+
+      if (t >= 1.05 && !ball.swung) autoBowl();
+    }
+  }
+
+  function drawPitch() {
+    // Ground
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#6fbf4a");
+    g.addColorStop(1, "#3d8a2a");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // Pitch strip
+    ctx.fillStyle = "#c9b07a";
+    ctx.beginPath();
+    ctx.moveTo(W * 0.34, 60);
+    ctx.lineTo(W * 0.66, 60);
+    ctx.lineTo(W * 0.78, H - 40);
+    ctx.lineTo(W * 0.22, H - 40);
+    ctx.closePath();
+    ctx.fill();
+
+    // Creases
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(W * 0.38, 95); ctx.lineTo(W * 0.62, 95);
+    ctx.moveTo(W * 0.28, H * 0.58); ctx.lineTo(W * 0.72, H * 0.58);
+    ctx.stroke();
+
+    // Stumps (batsman end)
+    var sx = W * 0.72, sy = H * 0.58;
+    ctx.fillStyle = "#f5f0e1";
+    for (var i = -1; i <= 1; i++) {
+      ctx.fillRect(sx + i * 8 - 2, sy - 28, 4, 28);
+    }
+    ctx.fillStyle = "#d03238";
+    ctx.fillRect(sx - 12, sy - 32, 24, 3);
+
+    // Bowler stumps
+    ctx.fillStyle = "#f5f0e1";
+    for (i = -1; i <= 1; i++) {
+      ctx.fillRect(W * 0.2 + i * 7 - 2, 55, 3, 22);
+    }
+  }
+
+  function drawBatter() {
+    var bx = W * 0.68, by = H * 0.64;
+    // Body
+    ctx.fillStyle = "#1a4d8c";
+    ctx.beginPath();
+    ctx.arc(bx - 18, by - 10, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(bx - 28, by - 4, 20, 34);
+    // Helmet
+    ctx.fillStyle = "#054d28";
+    ctx.beginPath();
+    ctx.arc(bx - 18, by - 22, 11, 0, Math.PI * 2);
+    ctx.fill();
+    // Bat
+    ctx.save();
+    ctx.translate(bx - 6, by + 2);
+    ctx.rotate(batAngle);
+    ctx.fillStyle = "#b86700";
+    P.roundRect(ctx, -6, -8, 14, 58, 4);
+    ctx.fill();
+    ctx.fillStyle = "#8a4f00";
+    ctx.fillRect(-2, -18, 6, 14);
+    ctx.restore();
+  }
+
+  function drawBowler() {
+    ctx.fillStyle = "#d03238";
+    ctx.beginPath();
+    ctx.arc(W * 0.18, 48, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(W * 0.18 - 8, 56, 16, 26);
+  }
+
+  function render() {
+    drawPitch();
+    drawBowler();
+    drawBatter();
+
+    if (ball && state === "bowl") {
+      // Shadow
+      ctx.fillStyle = "rgba(0,0,0,0.2)";
+      ctx.beginPath();
+      ctx.ellipse(ball.x, H * 0.58 + 8, 10, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Ball
+      ctx.fillStyle = "#d03238";
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, 5, -0.6, 0.8);
+      ctx.stroke();
+
+      // Timing cue near sweet spot
+      if (ball.t > 0.65 && ball.t < 0.95 && !ball.swung) {
+        ctx.strokeStyle = "rgba(255,209,26,0.7)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(W * 0.72, H * 0.62, 22 + Math.sin(ball.t * 40) * 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    if (flashT > 0 && resultFlash) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, flashT * 2);
+      ctx.fillStyle = resultFlash.indexOf("SIX") >= 0 || resultFlash.indexOf("FOUR") >= 0
+        ? "#ffd11a" : resultFlash.indexOf("OUT") >= 0 || resultFlash.indexOf("BOWL") >= 0
+        ? "#d03238" : "#ffffff";
+      ctx.font = "900 42px system-ui,sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(resultFlash, W / 2, H * 0.28);
+      ctx.restore();
+    }
+  }
+
+  var loop = P.loop(step, render);
+
+  document.getElementById("go").addEventListener("click", function () {
+    document.getElementById("overlay").hidden = true;
+    reset();
+    loop.start();
+  });
+})();
+</script>
+</body>
+</html>

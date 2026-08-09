@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en" data-game="court-clash">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Court Clash</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #ffd11a; --g2: #2ead4b; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div class="pp-touch" id="touch">
+  <div class="cluster"><button id="tl">◀</button><button id="tr">▶</button></div>
+</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Court Clash</h1>
+    <p class="pp-sub" id="msg">First to 5 games wins the set. Keep the rally alive.</p>
+    <p class="pp-sub">
+      <span class="pp-kbd">←</span><span class="pp-kbd">→</span> / drag to move
+    </p>
+    <div id="finalStats"></div>
+    <p></p>
+    <button class="pp-btn" id="go">Serve</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var W = 480, H = 720;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+  var input = P.input();
+
+  if (P.isTouch) {
+    document.getElementById("touch").classList.add("on");
+    input.bind(document.getElementById("tl"), "left");
+    input.bind(document.getElementById("tr"), "right");
+  }
+
+  P.hud({ you: "You", ai: "Rival", rally: "Rally", games: "Games" });
+
+  var player, rival, ball;
+  var youPts, aiPts, youGames, aiGames, rally, bestRally, hits;
+  var running, serving, serveTimer, pointerX;
+
+  canvas.addEventListener("pointermove", function (e) {
+    var r = canvas.getBoundingClientRect();
+    pointerX = ((e.clientX - r.left) / r.width) * W;
+  });
+  canvas.addEventListener("touchmove", function (e) {
+    if (!e.touches[0]) return;
+    var r = canvas.getBoundingClientRect();
+    pointerX = ((e.touches[0].clientX - r.left) / r.width) * W;
+    e.preventDefault();
+  }, { passive: false });
+
+  function reset() {
+    player = { x: W / 2, y: H - 56, w: 78, h: 14, speed: 380 };
+    rival = { x: W / 2, y: 56, w: 78, h: 14, speed: 210 };
+    youPts = 0; aiPts = 0; youGames = 0; aiGames = 0;
+    rally = 0; bestRally = 0; hits = 0;
+    running = true;
+    serveToPlayer(true);
+    syncHUD();
+  }
+
+  function syncHUD() {
+    P.set({
+      you: String(youPts),
+      ai: String(aiPts),
+      rally: String(rally),
+      games: youGames + "–" + aiGames
+    });
+  }
+
+  function serveToPlayer(playerServe) {
+    serving = true;
+    serveTimer = 0.7;
+    ball = {
+      x: W / 2,
+      y: playerServe ? H - 90 : 90,
+      vx: P.rand(-40, 40),
+      vy: playerServe ? -280 : 280,
+      r: 9,
+      lastHit: null
+    };
+  }
+
+  function bouncePad(pad, fromBelow) {
+    var nearest = P.clamp(ball.x, pad.x - pad.w / 2, pad.x + pad.w / 2);
+    var offset = (ball.x - pad.x) / (pad.w / 2);
+    ball.vy = (fromBelow ? -1 : 1) * (280 + Math.min(160, rally * 8));
+    ball.vx = offset * 260 + P.rand(-20, 20);
+    ball.y = fromBelow ? pad.y - pad.h / 2 - ball.r - 1 : pad.y + pad.h / 2 + ball.r + 1;
+    ball.lastHit = fromBelow ? "player" : "ai";
+    hits++;
+    rally++;
+    if (rally > bestRally) bestRally = rally;
+    if (rally >= 12) P.achieve("rally-12", "Long Game", "Hold a 12-shot rally");
+    sfx.play(fromBelow ? 660 : 520, 0.05, "triangle", 0.04);
+    syncHUD();
+  }
+
+  function point(toPlayer) {
+    if (toPlayer) youPts++; else aiPts++;
+    rally = 0;
+    sfx.play(toPlayer ? 880 : 180, 0.12, toPlayer ? "square" : "sawtooth", 0.05);
+    syncHUD();
+
+    if (youPts >= 4 && youPts - aiPts >= 2) {
+      youGames++;
+      youPts = 0; aiPts = 0;
+      P.toast("🎾", "Game", "You " + youGames + "–" + aiGames);
+      if (youGames >= 3) P.achieve("games-3", "Set Point Pressure", "Win 3 games in a set");
+    } else if (aiPts >= 4 && aiPts - youPts >= 2) {
+      aiGames++;
+      youPts = 0; aiPts = 0;
+      P.toast("🎾", "Game rival", "You " + youGames + "–" + aiGames);
+    }
+
+    if (youGames >= 5 || aiGames >= 5) {
+      endSet();
+      return;
+    }
+
+    serveToPlayer(toPlayer);
+  }
+
+  function endSet() {
+    running = false;
+    loop.stop();
+    var score = youGames * 1000 + youPts * 50 + bestRally * 10 + hits;
+    var won = youGames > aiGames;
+    if (won) P.achieve("set-win", "Set Winner", "Win a set of Court Clash");
+    var res = P.run(score, { games: youGames + "-" + aiGames, rally: bestRally });
+    document.querySelector("#overlay .pp-title").textContent = won ? "You take the set" : "Set lost";
+    document.getElementById("msg").textContent = res.isBest
+      ? "New personal best."
+      : "Best so far: " + P.commas(res.best) + ".";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      '<div><span>Score</span><b>' + P.commas(score) + '</b></div>' +
+      '<div><span>Games</span><b>' + youGames + "–" + aiGames + '</b></div>' +
+      '<div><span>Best rally</span><b>' + bestRally + '</b></div>' +
+      '<div><span>Best</span><b>' + P.commas(res.best) + '</b></div>' +
+      "</div>";
+    document.getElementById("go").textContent = "Play again";
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function step(dt) {
+    if (!running) return;
+
+    var move = 0;
+    if (input.down("left")) move -= 1;
+    if (input.down("right")) move += 1;
+    if (typeof pointerX === "number") {
+      player.x = P.lerp(player.x, pointerX, Math.min(1, dt * 14));
+    } else {
+      player.x += move * player.speed * dt;
+    }
+    player.x = P.clamp(player.x, player.w / 2 + 8, W - player.w / 2 - 8);
+
+    // AI tracks with lag and slight error that shrinks as you lead
+    var aim = ball.x + ball.vx * 0.12;
+    var skill = 0.55 + Math.min(0.3, aiGames * 0.04);
+    rival.x = P.lerp(rival.x, aim + Math.sin(Date.now() / 280) * (18 - skill * 10), skill * dt * 7);
+    rival.x = P.clamp(rival.x, rival.w / 2 + 8, W - rival.w / 2 - 8);
+    rival.speed = 190 + youGames * 18;
+
+    if (serving) {
+      serveTimer -= dt;
+      if (serveTimer > 0) return;
+      serving = false;
+    }
+
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    // Side walls
+    if (ball.x - ball.r < 18) { ball.x = 18 + ball.r; ball.vx *= -1; }
+    if (ball.x + ball.r > W - 18) { ball.x = W - 18 - ball.r; ball.vx *= -1; }
+
+    // Paddles
+    if (ball.vy > 0 && ball.lastHit !== "player" &&
+        ball.y + ball.r >= player.y - player.h / 2 &&
+        ball.y - ball.r <= player.y + player.h / 2 &&
+        ball.x >= player.x - player.w / 2 - 4 &&
+        ball.x <= player.x + player.w / 2 + 4) {
+      bouncePad(player, true);
+    }
+    if (ball.vy < 0 && ball.lastHit !== "ai" &&
+        ball.y - ball.r <= rival.y + rival.h / 2 &&
+        ball.y + ball.r >= rival.y - rival.h / 2 &&
+        ball.x >= rival.x - rival.w / 2 - 4 &&
+        ball.x <= rival.x + rival.w / 2 + 4) {
+      bouncePad(rival, false);
+    }
+
+    if (ball.y > H + 20) point(false);
+    if (ball.y < -20) point(true);
+  }
+
+  function drawCourt() {
+    ctx.fillStyle = "#2ead4b";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#278a3d";
+    ctx.fillRect(24, 24, W - 48, H - 48);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(36, 36, W - 72, H - 72);
+    ctx.beginPath();
+    ctx.moveTo(W / 2, 36);
+    ctx.lineTo(W / 2, H - 36);
+    ctx.moveTo(36, H / 2);
+    ctx.lineTo(W - 36, H / 2);
+    ctx.stroke();
+
+    // Net
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.fillRect(30, H / 2 - 3, W - 60, 6);
+  }
+
+  function drawPad(p, color) {
+    ctx.fillStyle = color;
+    P.roundRect(ctx, p.x - p.w / 2, p.y - p.h / 2, p.w, p.h, 7);
+    ctx.fill();
+  }
+
+  function render() {
+    drawCourt();
+    drawPad(rival, "#ffc091");
+    drawPad(player, "#ffd11a");
+
+    if (ball) {
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#e2e2e2";
+      ctx.stroke();
+    }
+
+    if (serving) {
+      ctx.fillStyle = "rgba(14,15,12,0.45)";
+      ctx.font = "800 18px system-ui,sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Ready…", W / 2, H / 2 - 16);
+    }
+  }
+
+  var loop = P.loop(step, render);
+
+  document.getElementById("go").addEventListener("click", function () {
+    document.getElementById("overlay").hidden = true;
+    pointerX = undefined;
+    reset();
+    loop.start();
+  });
+})();
+</script>
+</body>
+</html>
