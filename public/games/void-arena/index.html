@@ -32,14 +32,6 @@
 <body>
 <div class="pp-stage"><canvas id="c"></canvas></div>
 
-<div class="pp-touch" id="touch">
-  <div class="cluster">
-    <button id="tl">◀</button><button id="tu">▲</button>
-    <button id="td">▼</button><button id="tr">▶</button>
-  </div>
-  <div class="cluster"><button id="tf">🔥</button></div>
-</div>
-
 <div class="pp-overlay" id="levelup" hidden>
   <div>
     <h2 class="pp-title" style="font-size:clamp(24px,5vw,36px)">Level <span id="luLevel">2</span></h2>
@@ -115,13 +107,64 @@
   var mouse = { x: W / 2, y: 0, down: false };
   var input = P.input();
 
+  /**
+   * Touch movement: drag anywhere on the arena and the ship follows. The
+   * joystick's origin snaps to wherever the finger lands rather than a
+   * fixed corner, so it works no matter how the player naturally holds the
+   * phone. Firing stays fully automatic at the nearest enemy (unchanged
+   * below) — a drag-to-move joystick plus auto-fire replaced what used to
+   * be five separate buttons.
+   */
+  var joystick = { active: false, x: 0, y: 0, originX: 0, originY: 0, stickX: 0, stickY: 0 };
+  var JOY_RADIUS = 52;
+
+  function canvasPoint(clientX, clientY) {
+    var rect = canvas.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left) * (W / rect.width),
+      y: (clientY - rect.top) * (H / rect.height)
+    };
+  }
+
+  function joyStart(clientX, clientY) {
+    var p = canvasPoint(clientX, clientY);
+    joystick.active = true;
+    joystick.originX = joystick.stickX = p.x;
+    joystick.originY = joystick.stickY = p.y;
+    joystick.x = 0;
+    joystick.y = 0;
+  }
+
+  function joyMove(clientX, clientY) {
+    if (!joystick.active) return;
+    var p = canvasPoint(clientX, clientY);
+    var dx = p.x - joystick.originX, dy = p.y - joystick.originY;
+    var dist = Math.min(JOY_RADIUS, Math.hypot(dx, dy)) || 0.0001;
+    var ang = Math.atan2(dy, dx);
+    joystick.stickX = joystick.originX + Math.cos(ang) * dist;
+    joystick.stickY = joystick.originY + Math.sin(ang) * dist;
+    // Analog magnitude: a light drag moves slower than a full drag.
+    joystick.x = (Math.cos(ang) * dist) / JOY_RADIUS;
+    joystick.y = (Math.sin(ang) * dist) / JOY_RADIUS;
+  }
+
+  function joyEnd() {
+    joystick.active = false;
+    joystick.x = 0;
+    joystick.y = 0;
+  }
+
   if (P.isTouch) {
-    document.getElementById("touch").classList.add("on");
-    input.bind(document.getElementById("tl"), "left");
-    input.bind(document.getElementById("tr"), "right");
-    input.bind(document.getElementById("tu"), "up");
-    input.bind(document.getElementById("td"), "down");
-    input.bind(document.getElementById("tf"), "fire");
+    canvas.addEventListener("touchstart", function (e) {
+      joyStart(e.touches[0].clientX, e.touches[0].clientY);
+      e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener("touchmove", function (e) {
+      joyMove(e.touches[0].clientX, e.touches[0].clientY);
+      e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener("touchend", joyEnd);
+    canvas.addEventListener("touchcancel", joyEnd);
   }
 
   P.hud({ score: "Score", level: "Level", kills: "Kills", alive: "Alive", time: "Time" });
@@ -420,21 +463,28 @@
   }
 
   function stepPlayer(dt) {
-    var ax = 0, ay = 0;
-    if (input.down("left")) ax -= 1;
-    if (input.down("right")) ax += 1;
-    if (input.down("up")) ay -= 1;
-    if (input.down("down")) ay += 1;
-    var len = Math.hypot(ax, ay);
-    if (len > 0) {
-      player.vx += (ax / len) * player.speed * dt * 9;
-      player.vy += (ay / len) * player.speed * dt * 9;
+    if (P.isTouch) {
+      // Joystick magnitude is already 0..1, so it doubles as analog speed
+      // control — a light drag moves slower than a full drag.
+      player.vx += joystick.x * player.speed * dt * 9;
+      player.vy += joystick.y * player.speed * dt * 9;
+    } else {
+      var ax = 0, ay = 0;
+      if (input.down("left")) ax -= 1;
+      if (input.down("right")) ax += 1;
+      if (input.down("up")) ay -= 1;
+      if (input.down("down")) ay += 1;
+      var len = Math.hypot(ax, ay);
+      if (len > 0) {
+        player.vx += (ax / len) * player.speed * dt * 9;
+        player.vy += (ay / len) * player.speed * dt * 9;
+      }
     }
 
     if (P.isTouch) {
       var t = nearestEnemy(player);
       if (t) player.aim = Math.atan2(t.y - player.y, t.x - player.x);
-      if (input.down("fire") || t) fire(player);
+      if (t) fire(player);
     } else {
       player.aim = Math.atan2(
         mouse.y + camera.y - player.y,
@@ -767,6 +817,7 @@
     drawLeaderboard();
     drawMinimap();
     drawXPBar();
+    drawJoystick();
 
     if (Math.hypot(player.x, player.y) > storm.r) {
       ctx.fillStyle = "rgba(251,113,133,.14)";
@@ -777,6 +828,23 @@
       ctx.fillText("GET BACK INSIDE", W / 2, 78);
       ctx.textAlign = "left";
     }
+  }
+
+  function drawJoystick() {
+    if (!P.isTouch || !joystick.active) return;
+    ctx.save();
+    ctx.strokeStyle = "rgba(56,200,255,.55)";
+    ctx.fillStyle = "rgba(56,200,255,.12)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(joystick.originX, joystick.originY, JOY_RADIUS, 0, 7);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "rgba(56,200,255,.6)";
+    ctx.beginPath();
+    ctx.arc(joystick.stickX, joystick.stickY, 20, 0, 7);
+    ctx.fill();
+    ctx.restore();
   }
 
   function drawShip(e) {
