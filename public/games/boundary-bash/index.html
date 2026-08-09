@@ -49,9 +49,24 @@
 
   P.hud({ runs: "Runs", wickets: "Wickets", balls: "Balls", streak: "Boundary" });
 
-  var state, ball, batAngle, swingT, resultFlash, flashT;
+  // Pitch geometry: bowler runs in from top, batsman stands lower-right,
+  // wicketkeeper crouches behind the stumps. Everything is drawn in this
+  // shared coordinate space so the ball's flight and the fielders line up.
+  var BOWLER = { x: W * 0.2, y: 52 };
+  var STUMPS = { x: W * 0.72, y: H * 0.58 };
+  var KEEPER = { x: W * 0.86, y: H * 0.66 };
+  var BOUNDARY_R = 205;
+  var FIELDERS = [
+    { a: -0.9, r: 0.92 }, { a: -0.35, r: 0.96 }, { a: 0.25, r: 0.9 },
+    { a: 0.85, r: 0.94 }, { a: 1.6, r: 0.88 }, { a: -2.1, r: 0.9 }
+  ].map(function (f) {
+    return { x: STUMPS.x + Math.cos(f.a) * BOUNDARY_R * f.r, y: STUMPS.y + Math.sin(f.a) * BOUNDARY_R * f.r };
+  });
+
+  var state, ball, batAngle, swingT, resultFlash, flashT, stumpsBroken, bailT;
+  var flight; // active post-contact ball animation, or null
   var runs, wickets, balls, streak, sixes, fours, bestStreak;
-  var running, waiting, deliverySpeed, pitchTarget;
+  var running, deliverySpeed, pitchTarget;
   var pointerSwing = false;
 
   canvas.addEventListener("pointerdown", function () { pointerSwing = true; });
@@ -59,7 +74,8 @@
   function reset() {
     runs = 0; wickets = 0; balls = 0; streak = 0; sixes = 0; fours = 0; bestStreak = 0;
     batAngle = -0.55; swingT = 0; resultFlash = ""; flashT = 0;
-    running = true; waiting = false;
+    stumpsBroken = false; bailT = 0; flight = null;
+    running = true;
     deliverySpeed = 1;
     nextDelivery();
     syncHUD();
@@ -76,15 +92,11 @@
 
   function nextDelivery() {
     state = "bowl";
-    waiting = false;
     pitchTarget = P.rand(0.28, 0.72);
     ball = {
-      x: W * 0.18,
-      y: 70,
-      t: 0,
+      x: BOWLER.x, y: BOWLER.y, t: 0,
       speed: 0.72 + deliverySpeed * 0.08 + Math.random() * 0.06,
-      swung: false,
-      hit: false
+      swung: false
     };
     batAngle = -0.55;
     swingT = 0;
@@ -94,7 +106,7 @@
     if (!running || state !== "bowl" || ball.swung) return;
     ball.swung = true;
     swingT = 0.22;
-    var timing = ball.t; // 0..1 along flight; sweet ~0.78–0.92 near bat
+    var timing = ball.t;
     var err = Math.abs(timing - 0.85);
     var outcome;
 
@@ -115,16 +127,72 @@
     resolve(outcome);
   }
 
+  /**
+   * Every outcome gets a visible ball flight before the next delivery —
+   * this is the piece that was missing entirely before: the ball used to
+   * just vanish the instant you swung.
+   */
+  function startFlight(outcome) {
+    var contact = { x: STUMPS.x - 14, y: STUMPS.y - 6 };
+    var shotAngle = (pitchTarget - 0.5) * 1.4 + P.rand(-0.15, 0.15);
+
+    if (outcome === "six") {
+      var a6 = -0.55 + shotAngle;
+      flight = {
+        kind: "hit", dur: 1.05, t: 0,
+        from: contact,
+        to: { x: contact.x + Math.cos(a6) * BOUNDARY_R * 1.9, y: contact.y + Math.sin(a6) * BOUNDARY_R * 1.9 },
+        arcHeight: 150, trail: []
+      };
+    } else if (outcome === "four") {
+      var a4 = -0.15 + shotAngle;
+      flight = {
+        kind: "hit", dur: 0.85, t: 0,
+        from: contact,
+        to: { x: contact.x + Math.cos(a4) * BOUNDARY_R * 1.05, y: contact.y + Math.sin(a4) * BOUNDARY_R * 1.05 },
+        arcHeight: 26, trail: []
+      };
+    } else if (outcome === "two" || outcome === "one") {
+      var short = FIELDERS[(Math.random() * FIELDERS.length) | 0];
+      flight = {
+        kind: "hit", dur: 0.6, t: 0,
+        from: contact,
+        to: { x: P.lerp(contact.x, short.x, 0.5), y: P.lerp(contact.y, short.y, 0.5) },
+        arcHeight: 14, trail: []
+      };
+    } else if (outcome === "out") {
+      var catcher = FIELDERS[(Math.random() * FIELDERS.length) | 0];
+      flight = {
+        kind: "catch", dur: 0.7, t: 0,
+        from: contact, to: { x: catcher.x, y: catcher.y },
+        arcHeight: 60, trail: [], catcher: catcher
+      };
+    } else if (outcome === "miss") {
+      flight = {
+        kind: "keeper", dur: 0.32, t: 0,
+        from: { x: STUMPS.x + 10, y: STUMPS.y - 8 }, to: { x: KEEPER.x, y: KEEPER.y },
+        arcHeight: 4, trail: []
+      };
+    } else if (outcome === "bowled") {
+      // The ball is already almost at the stumps by the time either trigger
+      // fires (a late/missed swing, or beating the bat outright) -- continue
+      // from where it actually is rather than an assumed contact point.
+      flight = {
+        kind: "bowled", dur: 0.18, t: 0,
+        from: { x: ball.x, y: ball.y }, to: { x: STUMPS.x, y: STUMPS.y - 18 },
+        arcHeight: 0, trail: []
+      };
+    }
+  }
+
   function resolve(outcome) {
     balls++;
-    state = "result";
-    waiting = true;
-    var delay = 0.85;
+    var delay = 1.1;
 
     if (outcome === "six") {
       runs += 6; sixes++; streak++;
       if (streak > bestStreak) bestStreak = streak;
-      resultFlash = "SIX!"; flashT = 0.9;
+      resultFlash = "SIX!"; flashT = 1.1;
       sfx.play(880, 0.12, "triangle", 0.06);
       sfx.play(1320, 0.08, "square", 0.04);
       if (sixes >= 5) P.achieve("sixes-5", "Sky High", "Hit five sixes in one innings");
@@ -132,75 +200,61 @@
     } else if (outcome === "four") {
       runs += 4; fours++; streak++;
       if (streak > bestStreak) bestStreak = streak;
-      resultFlash = "FOUR"; flashT = 0.75;
+      resultFlash = "FOUR"; flashT = 0.95;
       sfx.play(740, 0.1, "triangle", 0.05);
       if (streak >= 4) P.achieve("boundary-4", "Boundary Machine", "Four boundaries in a row");
     } else if (outcome === "two") {
       runs += 2; streak = 0;
-      resultFlash = "2 RUNS"; flashT = 0.6;
+      resultFlash = "2 RUNS"; flashT = 0.7;
       sfx.play(520, 0.06, "sine", 0.04);
     } else if (outcome === "one") {
       runs += 1; streak = 0;
-      resultFlash = "1 RUN"; flashT = 0.55;
+      resultFlash = "1 RUN"; flashT = 0.65;
       sfx.play(440, 0.05, "sine", 0.035);
     } else if (outcome === "miss") {
       streak = 0;
-      // Dot ball — no wicket unless very late swing into stumps zone
       if (ball.t > 0.92 && Math.random() < 0.4) {
+        outcome = "bowled";
         wickets++;
         resultFlash = "BOWLED!";
-        flashT = 1;
+        flashT = 1.2;
         sfx.play(140, 0.25, "sawtooth", 0.06);
       } else {
         resultFlash = "DOT";
-        flashT = 0.5;
+        flashT = 0.6;
         sfx.play(200, 0.08, "triangle", 0.03);
       }
+    } else if (outcome === "bowled_direct") {
+      outcome = "bowled";
+      wickets++; streak = 0;
+      resultFlash = "BOWLED!";
+      flashT = 1.2;
+      sfx.play(140, 0.25, "sawtooth", 0.06);
     } else {
       wickets++; streak = 0;
       resultFlash = "OUT!";
-      flashT = 1;
+      flashT = 1.2;
       sfx.play(120, 0.28, "sawtooth", 0.06);
     }
 
     if (runs >= 50) P.achieve("fifty", "Half Century", "Score 50 runs in one innings");
 
+    state = "flight";
+    startFlight(outcome);
     syncHUD();
 
-    if (wickets >= 3) {
-      setTimeout(endInnings, 700);
-      return;
-    }
-
-    deliverySpeed = Math.min(3.2, 1 + balls * 0.045);
     setTimeout(function () {
       if (!running) return;
+      if (wickets >= 3) { endInnings(); return; }
+      deliverySpeed = Math.min(3.2, 1 + balls * 0.045);
       nextDelivery();
     }, delay * 1000);
   }
 
   function autoBowl() {
-    // Missed swing entirely — ball hits pads/stumps
     if (ball.swung) return;
     ball.swung = true;
-    balls++;
-    wickets++;
-    streak = 0;
-    resultFlash = "BOWLED!";
-    flashT = 1;
-    state = "result";
-    waiting = true;
-    sfx.play(110, 0.3, "sawtooth", 0.06);
-    syncHUD();
-    if (wickets >= 3) {
-      setTimeout(endInnings, 700);
-      return;
-    }
-    deliverySpeed = Math.min(3.2, 1 + balls * 0.045);
-    setTimeout(function () {
-      if (!running) return;
-      nextDelivery();
-    }, 900);
+    resolve("bowled_direct");
   }
 
   function endInnings() {
@@ -213,11 +267,8 @@
       : "Best so far: " + P.commas(res.best) + " runs.";
     document.getElementById("finalStats").innerHTML =
       '<div class="pp-stats">' +
-      stat("Runs", runs) +
-      stat("Balls", balls) +
-      stat("Sixes", sixes) +
-      stat("Fours", fours) +
-      stat("Best", P.commas(res.best)) +
+      stat("Runs", runs) + stat("Balls", balls) + stat("Sixes", sixes) +
+      stat("Fours", fours) + stat("Best", P.commas(res.best)) +
       "</div>";
     document.getElementById("go").textContent = "Bat again";
     document.getElementById("overlay").hidden = false;
@@ -236,17 +287,14 @@
     }
 
     if (flashT > 0) flashT -= dt;
+    if (bailT > 0) bailT -= dt;
 
     if (state === "bowl" && ball) {
       ball.t += ball.speed * dt;
-      // Arc from bowler to batsman crease
       var t = P.clamp(ball.t, 0, 1.15);
-      var x0 = W * 0.2, y0 = 78;
-      var x1 = W * 0.72, y1 = H * 0.62;
       var lift = Math.sin(Math.min(t, 1) * Math.PI) * (55 - deliverySpeed * 6);
-      ball.x = P.lerp(x0, x1, Math.min(t, 1));
-      ball.y = P.lerp(y0, y1, Math.min(t, 1)) - lift;
-      // lateral drift toward pitch line
+      ball.x = P.lerp(BOWLER.x, STUMPS.x, Math.min(t, 1));
+      ball.y = P.lerp(BOWLER.y, STUMPS.y, Math.min(t, 1)) - lift;
       ball.x += (pitchTarget - 0.5) * 40 * Math.min(t, 1);
 
       if (swingT > 0) {
@@ -255,16 +303,41 @@
       }
 
       if (t >= 1.05 && !ball.swung) autoBowl();
+    } else if (state === "flight" && flight) {
+      flight.t += dt / flight.dur;
+      var ft = Math.min(1, flight.t);
+      var fx = P.lerp(flight.from.x, flight.to.x, ft);
+      var fy = P.lerp(flight.from.y, flight.to.y, ft) - Math.sin(ft * Math.PI) * flight.arcHeight;
+      flight.trail.push({ x: fx, y: fy, a: 1 });
+      if (flight.trail.length > 10) flight.trail.shift();
+      flight.cx = fx; flight.cy = fy;
+
+      if (flight.kind === "bowled" && ft >= 0.85 && !stumpsBroken) {
+        stumpsBroken = true;
+        bailT = 1;
+      }
+      if (ft >= 1) {
+        if (flight.kind === "bowled") { flight = null; state = "done"; }
+        else if (flight.t > 1.15) { flight = null; state = "done"; }
+      }
     }
   }
 
   function drawPitch() {
-    // Ground
     var g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, "#6fbf4a");
     g.addColorStop(1, "#3d8a2a");
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
+
+    // Boundary rope
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([10, 8]);
+    ctx.beginPath();
+    ctx.ellipse(STUMPS.x, STUMPS.y, BOUNDARY_R * 1.05, BOUNDARY_R * 0.62, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
 
     // Pitch strip
     ctx.fillStyle = "#c9b07a";
@@ -276,44 +349,66 @@
     ctx.closePath();
     ctx.fill();
 
-    // Creases
     ctx.strokeStyle = "rgba(255,255,255,0.7)";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(W * 0.38, 95); ctx.lineTo(W * 0.62, 95);
     ctx.moveTo(W * 0.28, H * 0.58); ctx.lineTo(W * 0.72, H * 0.58);
     ctx.stroke();
+  }
 
-    // Stumps (batsman end)
-    var sx = W * 0.72, sy = H * 0.58;
+  function drawStumps() {
+    var sx = STUMPS.x, sy = STUMPS.y;
     ctx.fillStyle = "#f5f0e1";
     for (var i = -1; i <= 1; i++) {
-      ctx.fillRect(sx + i * 8 - 2, sy - 28, 4, 28);
+      var kick = stumpsBroken && bailT > 0 ? Math.sin(bailT * 30) * (1.1 - bailT) * 6 : 0;
+      ctx.save();
+      ctx.translate(sx + i * 8, sy);
+      ctx.rotate((stumpsBroken ? (1.1 - bailT) : 0) * 0.5 * i);
+      ctx.fillRect(-2, -28 + kick, 4, 28);
+      ctx.restore();
     }
-    ctx.fillStyle = "#d03238";
-    ctx.fillRect(sx - 12, sy - 32, 24, 3);
+    if (!stumpsBroken || bailT <= 0) {
+      ctx.fillStyle = "#d03238";
+      ctx.fillRect(sx - 12, sy - 32, 24, 3);
+    } else {
+      // Bails knocked off, flying away
+      ctx.fillStyle = "#d03238";
+      var bx = sx - 12 + (1.1 - bailT) * 26, by = sy - 34 - (1.1 - bailT) * 18;
+      ctx.fillRect(bx, by, 10, 3);
+    }
 
-    // Bowler stumps
     ctx.fillStyle = "#f5f0e1";
     for (i = -1; i <= 1; i++) {
-      ctx.fillRect(W * 0.2 + i * 7 - 2, 55, 3, 22);
+      ctx.fillRect(BOWLER.x + i * 7 - 2, BOWLER.y + 3, 3, 22);
+    }
+  }
+
+  function drawPerson(x, y, shirt, cap) {
+    ctx.fillStyle = shirt;
+    ctx.beginPath();
+    ctx.arc(x, y - 10, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(x - 6, y - 4, 12, 20);
+    if (cap) {
+      ctx.fillStyle = cap;
+      ctx.beginPath();
+      ctx.arc(x, y - 15, 6, Math.PI, 0);
+      ctx.fill();
     }
   }
 
   function drawBatter() {
     var bx = W * 0.68, by = H * 0.64;
-    // Body
     ctx.fillStyle = "#1a4d8c";
     ctx.beginPath();
     ctx.arc(bx - 18, by - 10, 14, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillRect(bx - 28, by - 4, 20, 34);
-    // Helmet
     ctx.fillStyle = "#054d28";
     ctx.beginPath();
     ctx.arc(bx - 18, by - 22, 11, 0, Math.PI * 2);
     ctx.fill();
-    // Bat
     ctx.save();
     ctx.translate(bx - 6, by + 2);
     ctx.rotate(batAngle);
@@ -328,40 +423,74 @@
   function drawBowler() {
     ctx.fillStyle = "#d03238";
     ctx.beginPath();
-    ctx.arc(W * 0.18, 48, 11, 0, Math.PI * 2);
+    ctx.arc(BOWLER.x, BOWLER.y - 4, 11, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillRect(W * 0.18 - 8, 56, 16, 26);
+    ctx.fillRect(BOWLER.x - 8, BOWLER.y + 4, 16, 26);
+  }
+
+  function drawBallSprite(x, y, elevated) {
+    if (elevated) {
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.beginPath();
+      ctx.ellipse(x, STUMPS.y + 10, 9, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#d03238";
+    ctx.beginPath();
+    ctx.arc(x, y, 7.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, -0.6, 0.8);
+    ctx.stroke();
   }
 
   function render() {
     drawPitch();
+
+    FIELDERS.forEach(function (f, i) {
+      drawPerson(f.x, f.y, i % 2 ? "#38c8ff" : "#0a3d1f", "#ffd11a");
+    });
+
+    drawStumps();
     drawBowler();
+    drawPerson(KEEPER.x, KEEPER.y, "#0a3d1f", "#ffd11a");
     drawBatter();
 
     if (ball && state === "bowl") {
-      // Shadow
       ctx.fillStyle = "rgba(0,0,0,0.2)";
       ctx.beginPath();
       ctx.ellipse(ball.x, H * 0.58 + 8, 10, 4, 0, 0, Math.PI * 2);
       ctx.fill();
-      // Ball
-      ctx.fillStyle = "#d03238";
-      ctx.beginPath();
-      ctx.arc(ball.x, ball.y, 8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(ball.x, ball.y, 5, -0.6, 0.8);
-      ctx.stroke();
+      drawBallSprite(ball.x, ball.y, false);
 
-      // Timing cue near sweet spot
       if (ball.t > 0.65 && ball.t < 0.95 && !ball.swung) {
         ctx.strokeStyle = "rgba(255,209,26,0.7)";
         ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.arc(W * 0.72, H * 0.62, 22 + Math.sin(ball.t * 40) * 3, 0, Math.PI * 2);
+        ctx.arc(STUMPS.x, STUMPS.y, 22 + Math.sin(ball.t * 40) * 3, 0, Math.PI * 2);
         ctx.stroke();
+      }
+    }
+
+    if (state === "flight" && flight) {
+      for (var i = 0; i < flight.trail.length; i++) {
+        var tp = flight.trail[i];
+        ctx.globalAlpha = (i / flight.trail.length) * 0.4;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(tp.x, tp.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      drawBallSprite(flight.cx, flight.cy, flight.arcHeight > 0);
+      if (flight.kind === "catch" && flight.t > 0.9) {
+        ctx.fillStyle = "#ffd11a";
+        ctx.font = "800 13px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText("CAUGHT", flight.catcher.x, flight.catcher.y - 20);
+        ctx.textAlign = "left";
       }
     }
 
@@ -373,7 +502,7 @@
         ? "#d03238" : "#ffffff";
       ctx.font = "900 42px system-ui,sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(resultFlash, W / 2, H * 0.28);
+      ctx.fillText(resultFlash, W / 2, H * 0.22);
       ctx.restore();
     }
   }
