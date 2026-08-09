@@ -44,7 +44,7 @@ export type Game = {
    */
   embedUrl: string;
   /** Aspect ratio the game is designed for, used to size the player. */
-  aspect: "16:9" | "4:3" | "1:1";
+  aspect: "16:9" | "4:3" | "1:1" | "2:3";
   /** Seeded so the numbers stay stable between server and client renders. */
   plays: number;
   rating: number;
@@ -480,28 +480,30 @@ export const GAMES: Game[] = [
   {
     slug: "boundary-bash",
     title: "Boundary Bash",
-    tagline: "Time the swing. Clear the ropes.",
+    tagline: "One over each. Stake your coins.",
     description:
-      "A timing-based cricket batting game. Each delivery comes in faster than the last — swing in the sweet spot for fours and sixes, mistime it and you're walking back. Three wickets to build an innings.",
+      "A full Super Over from behind the stumps. Stake your coins, bat six balls picking the zone you swing through, then take the ball and defend your total — choosing line, length and release for every delivery. Beat the chase and your stake doubles.",
     howToPlay: [
-      "Press space or click/tap to swing as the ball reaches you.",
-      "Swing in the glowing window for fours and sixes; early or late swings risk a wicket.",
-      "Dot balls don't cost a wicket, but missing the ball entirely often does.",
-      "You get three wickets. Chase a personal-best innings total.",
+      "Place a coin stake, then bat first: one over, two wickets.",
+      "While batting, pick your shot zone with ←/→ or a tap, then press space to swing as the ball arrives.",
+      "Matching your zone to the ball's line is what turns good timing into sixes.",
+      "Then you bowl: choose line with ←/→, length with ↑/↓, and release on the green of the meter.",
+      "Keep the rival under your total — or take two wickets — to double your stake.",
     ],
     category: "arcade",
-    tags: ["sports", "cricket", "timing", "highscore", "reflex"],
+    tags: ["sports", "cricket", "timing", "versus", "strategy"],
     embedUrl: "/games/boundary-bash/index.html",
-    aspect: "4:3",
+    aspect: "16:9",
     plays: 42110,
     rating: 4.4,
     releasedAt: "2026-08-09",
     featured: true,
-    controls: "Space / click / tap",
+    controls: "Arrows / space / tap",
     achievements: [
-      { id: "fifty", name: "Half Century", hint: "Score 50 runs in one innings", icon: "🏏" },
-      { id: "sixes-5", name: "Sky High", hint: "Hit five sixes in one innings", icon: "🚀" },
+      { id: "sixes-5", name: "Sky High", hint: "Hit five sixes in one over", icon: "🚀" },
       { id: "boundary-4", name: "Boundary Machine", hint: "Four boundaries in a row", icon: "🔥" },
+      { id: "defend-low", name: "Nerves of Steel", hint: "Defend a target of 10 or fewer", icon: "🧊" },
+      { id: "high-roller", name: "High Roller", hint: "Win a Super Over with a 500-coin stake", icon: "💰" },
     ],
     art: ["#2ead4b", "#054d28"],
     thumbnail: "/thumbs/boundary-bash.webp",
@@ -521,7 +523,8 @@ export const GAMES: Game[] = [
     category: "arcade",
     tags: ["sports", "tennis", "versus", "reflex", "highscore"],
     embedUrl: "/games/court-clash/index.html",
-    aspect: "4:3",
+    // The court is drawn 480x720 -- lengthwise, so the player box is portrait.
+    aspect: "2:3",
     plays: 38720,
     rating: 4.5,
     releasedAt: "2026-08-09",
@@ -569,6 +572,7 @@ export const ASPECT_RATIO: Record<Game["aspect"], string> = {
   "16:9": "16 / 9",
   "4:3": "4 / 3",
   "1:1": "1 / 1",
+  "2:3": "2 / 3",
 };
 
 export function getGame(slug: string): Game | undefined {
