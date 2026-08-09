@@ -21,9 +21,8 @@ function rng(seed: number) {
 }
 
 /**
- * Procedural cover art. Every game gets a distinct arrangement of blocks
- * derived from its slug, so the grid reads as a catalogue without shipping
- * a single bitmap.
+ * Game cover art. Prefers the shipped thumbnail image; falls back to a
+ * seeded gradient so missing covers still look distinct in the grid.
  */
 export default function GameArt({
   game,
@@ -32,6 +31,20 @@ export default function GameArt({
   game: Game;
   className?: string;
 }) {
+  if (game.thumbnail) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- static public asset; used as CSS-sized cover
+      <img
+        src={game.thumbnail}
+        alt=""
+        aria-hidden="true"
+        className={`object-cover ${className}`}
+        loading="lazy"
+        decoding="async"
+      />
+    );
+  }
+
   const [from, to] = game.art;
   const next = rng(hash(game.slug));
   const cells = Array.from({ length: 14 }, () => ({
@@ -69,7 +82,6 @@ export default function GameArt({
           />
         ))}
       </g>
-      {/* Soft canvas wash so covers sit calmly on the sage page. */}
       <rect width="16" height="10" fill="#ffffff" opacity="0.12" />
     </svg>
   );
