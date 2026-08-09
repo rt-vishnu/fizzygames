@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The bundled games are standalone ES5 files with their own conventions;
+    // they are not part of the app's module graph.
+    "public/games/**",
   ]),
 ]);
 

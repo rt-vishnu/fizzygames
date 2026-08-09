@@ -1,0 +1,1194 @@
+<!doctype html>
+<html lang="en" data-game="iron-line">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Iron Line</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #9fe870; --g2: #054d28; }
+  .pp-stage { align-items: flex-start; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); cursor: pointer; }
+
+  /* Bottom tray: tower shop on the left, run controls on the right. */
+  #tray {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 8;
+    display: flex; gap: 8px; align-items: center; padding: 8px 10px;
+    background: rgba(255, 255, 255, .96); border-top: 1px solid var(--line);
+    overflow-x: auto;
+  }
+  .shop { display: flex; gap: 6px; }
+  .tw {
+    position: relative; min-width: 76px; padding: 7px 8px; border-radius: 11px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; text-align: center;
+    transition: border-color .12s, transform .1s;
+  }
+  .tw:hover:not(:disabled) { border-color: var(--g1); transform: translateY(-2px); }
+  .tw.on { border-color: var(--g2); background: #2a3122; }
+  .tw:disabled { opacity: .42; cursor: not-allowed; }
+  .tw .ic { font-size: 17px; display: block; }
+  .tw .cost { color: var(--accent); display: block; margin-top: 2px; }
+  .tw .air { position: absolute; top: 3px; right: 5px; font-size: 9px; opacity: .8; }
+
+  #runctl { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+  /* Selected-tower inspector */
+  #inspect {
+    position: fixed; right: 10px; top: 46px; width: 210px; z-index: 9;
+    background: rgba(255, 255, 255, .96); border: 1px solid var(--line);
+    border-radius: 14px; padding: 12px; font-size: 12px;
+  }
+  #inspect[hidden] { display: none; }
+  #inspect h3 { margin: 0 0 2px; font-size: 15px; }
+  #inspect .lvl { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+  #inspect dl { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; margin: 0 0 10px; }
+  #inspect dt { color: var(--muted); }
+  #inspect dd { margin: 0; font-weight: 700; text-align: right; }
+  #inspect .up { color: var(--good); }
+  #inspect button { width: 100%; margin-top: 5px; }
+  .spec { display: grid; gap: 5px; margin-top: 6px; }
+  .spec button { font-size: 11px; padding: 8px; text-align: left; line-height: 1.4; }
+  .spec small { display: block; color: var(--muted); font-weight: 600; }
+
+  #wavepreview { color: var(--muted); font-size: 11px; font-weight: 700; }
+  #wavepreview b { color: var(--text); }
+
+  .maps { display: grid; gap: 8px; margin-top: 14px; }
+  .maps button { text-align: left; padding: 12px 14px; }
+  .maps small { display: block; color: var(--muted); font-weight: 600; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div id="tray">
+  <div class="shop" id="shop"></div>
+  <div id="runctl">
+    <span id="wavepreview"></span>
+    <button class="pp-btn ghost" id="speed">▶ 1×</button>
+    <button class="pp-btn" id="next" style="padding:10px 18px">Send wave</button>
+  </div>
+</div>
+
+<div id="inspect" hidden></div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Iron Line</h1>
+    <p class="pp-sub" id="msg">
+      Twenty waves come down one corridor. Build the thing that stops them.
+    </p>
+    <div id="finalStats"></div>
+    <div class="maps" id="maps"></div>
+    <p class="pp-sub" style="margin-top:14px">
+      Click a tower, then a buildable tile. Click a built tower to upgrade or sell.
+    </p>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var TILE = 48, COLS = 20, ROWS = 11;
+  var W = COLS * TILE, H = ROWS * TILE + 12;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+
+  /* ================================================================== *
+   * Maps
+   * ================================================================== */
+
+  var MAPS = [
+    {
+      name: "Canyon Pass",
+      blurb: "A long serpentine. Room to build, time to shoot.",
+      difficulty: "Standard",
+      tint: "#1f241a",
+      // Waypoints in tile coordinates; the road is walked between them.
+      path: [[-1, 2], [4, 2], [4, 6], [9, 6], [9, 1], [14, 1], [14, 8], [18, 8], [20, 8]],
+      blocked: [[6, 8], [7, 8], [6, 9], [7, 9], [12, 4], [13, 4], [16, 3], [17, 3]]
+    },
+    {
+      name: "Refinery",
+      blurb: "Tight switchbacks and a short run to the exit. Harder.",
+      difficulty: "Hard",
+      tint: "#2a3122",
+      path: [[-1, 9], [3, 9], [3, 5], [7, 5], [7, 9], [11, 9], [11, 2], [16, 2], [16, 6], [20, 6]],
+      blocked: [[1, 1], [2, 1], [1, 2], [5, 1], [5, 2], [9, 6], [9, 7], [13, 8], [14, 8], [18, 1], [18, 2]]
+    }
+  ];
+
+  /* ================================================================== *
+   * Towers
+   * ================================================================== */
+
+  var TOWERS = {
+    gun: {
+      name: "Autogun", icon: "🔫", cost: 60, air: true, ground: true,
+      desc: "Fast single-target fire.",
+      base: { damage: 7, range: 108, rate: 0.42, splash: 0, slow: 0, chains: 0, pierceArmor: 0 },
+      perLevel: { damage: 4, range: 12, rate: -0.06 },
+      specs: [
+        { id: "gatling", name: "Gatling", desc: "Doubles fire rate, loses a little damage.",
+          apply: function (t) { t.rate *= 0.48; t.damage *= 0.82; } },
+        { id: "ap", name: "AP Rounds", desc: "Ignores armour entirely.",
+          apply: function (t) { t.pierceArmor = 99; t.damage *= 1.12; } }
+      ]
+    },
+    frost: {
+      name: "Cryo", icon: "❄️", cost: 90, air: true, ground: true,
+      desc: "Slows what it hits.",
+      base: { damage: 4, range: 116, rate: 0.75, splash: 0, slow: 0.42, chains: 0, pierceArmor: 0 },
+      perLevel: { damage: 2, range: 14, rate: -0.07, slow: 0.06 },
+      specs: [
+        { id: "deepfreeze", name: "Deep Freeze", desc: "20% chance to freeze a target solid for 1s.",
+          apply: function (t) { t.freeze = 0.2; } },
+        { id: "chill", name: "Chill Field", desc: "Permanently slows everything in range, no shot needed.",
+          apply: function (t) { t.aura = true; t.slow = Math.min(0.62, t.slow + 0.08); } }
+      ]
+    },
+    mortar: {
+      name: "Mortar", icon: "💣", cost: 130, air: false, ground: true,
+      desc: "Arcing splash damage. Cannot hit air.",
+      base: { damage: 16, range: 150, rate: 1.55, splash: 46, slow: 0, chains: 0, pierceArmor: 0 },
+      perLevel: { damage: 10, range: 15, rate: -0.11, splash: 6 },
+      specs: [
+        { id: "cluster", name: "Cluster Shells", desc: "Much wider blast radius.",
+          apply: function (t) { t.splash *= 1.75; } },
+        { id: "napalm", name: "Napalm", desc: "Leaves targets burning for 4s.",
+          apply: function (t) { t.burn = 9; } }
+      ]
+    },
+    flak: {
+      name: "Flak", icon: "🎈", cost: 110, air: true, ground: false,
+      desc: "Anti-air only, but brutal at it.",
+      base: { damage: 14, range: 132, rate: 0.5, splash: 0, slow: 0, chains: 0, pierceArmor: 0 },
+      perLevel: { damage: 8, range: 13, rate: -0.05 },
+      specs: [
+        { id: "prox", name: "Proximity Fuse", desc: "Shells burst, hitting nearby flyers too.",
+          apply: function (t) { t.splash = 52; } },
+        { id: "lockon", name: "Lock-On", desc: "Big range and damage increase.",
+          apply: function (t) { t.range *= 1.35; t.damage *= 1.3; } }
+      ]
+    },
+    sniper: {
+      name: "Railgun", icon: "🎯", cost: 160, air: true, ground: true,
+      desc: "Enormous range, slow and heavy.",
+      base: { damage: 46, range: 250, rate: 1.9, splash: 0, slow: 0, chains: 0, pierceArmor: 4 },
+      perLevel: { damage: 26, range: 22, rate: -0.13, pierceArmor: 3 },
+      specs: [
+        { id: "rail", name: "Penetrator", desc: "The shot passes through everything in a line.",
+          apply: function (t) { t.line = true; } },
+        { id: "hunter", name: "Headhunter", desc: "Triple damage to bosses and tanks.",
+          apply: function (t) { t.bossBonus = 3; } }
+      ]
+    },
+    tesla: {
+      name: "Tesla", icon: "⚡", cost: 200, air: true, ground: true,
+      desc: "Chains between nearby targets.",
+      base: { damage: 13, range: 112, rate: 0.85, splash: 0, slow: 0, chains: 2, pierceArmor: 2 },
+      perLevel: { damage: 7, range: 10, rate: -0.07, chains: 1 },
+      specs: [
+        { id: "arc", name: "Arc Cascade", desc: "Three extra chain jumps.",
+          apply: function (t) { t.chains += 3; } },
+        { id: "overload", name: "Overload", desc: "Every hit briefly stuns.",
+          apply: function (t) { t.stun = 0.35; } }
+      ]
+    }
+  };
+
+  var TOWER_ORDER = ["gun", "frost", "flak", "mortar", "sniper", "tesla"];
+
+  function upgradeCost(t) {
+    return Math.round(TOWERS[t.kind].cost * (0.65 + t.level * 0.55));
+  }
+  function sellValue(t) {
+    return Math.round(t.spent * 0.7);
+  }
+
+  /** Recompute a tower's live stats from its kind, level and specialisation. */
+  function computeStats(t) {
+    var def = TOWERS[t.kind];
+    var s = {};
+    var k;
+    for (k in def.base) s[k] = def.base[k];
+    for (k in def.perLevel) s[k] = (s[k] || 0) + def.perLevel[k] * (t.level - 1);
+    s.rate = Math.max(0.09, s.rate);
+    s.kind = t.kind;
+    s.air = def.air;
+    s.ground = def.ground;
+    if (t.spec) {
+      var spec = def.specs.filter(function (x) { return x.id === t.spec; })[0];
+      if (spec) spec.apply(s);
+    }
+    return s;
+  }
+
+  /* ================================================================== *
+   * Enemies and waves
+   * ================================================================== */
+
+  var ENEMIES = {
+    grunt:  { name: "Grunt",  hp: 46,   speed: 46, armor: 0,  gold: 6,  r: 11, color: "#d03238", flying: false },
+    runner: { name: "Runner", hp: 30,   speed: 96, armor: 0,  gold: 7,  r: 9,  color: "#ffd11a", flying: false },
+    tank:   { name: "Tank",   hp: 220,  speed: 27, armor: 7,  gold: 18, r: 15, color: "#868685", flying: false },
+    flyer:  { name: "Flyer",  hp: 58,   speed: 74, armor: 1,  gold: 11, r: 11, color: "#38c8ff", flying: true },
+    healer: { name: "Medic",  hp: 96,   speed: 42, armor: 2,  gold: 16, r: 12, color: "#2ead4b", flying: false, heal: 13 },
+    boss:   { name: "Bulwark", hp: 1500, speed: 22, armor: 14, gold: 130, r: 22, color: "#2ead4b", flying: false, boss: true }
+  };
+
+  /**
+   * Twenty waves. Composition is authored rather than random so the
+   * difficulty curve and the "you need anti-air now" moments land reliably.
+   */
+  var WAVES = [
+    [["grunt", 8, 0.85]],
+    [["grunt", 12, 0.7]],
+    [["runner", 10, 0.45], ["grunt", 6, 0.7]],
+    [["flyer", 6, 0.7]],
+    [["grunt", 14, 0.5], ["runner", 8, 0.35]],
+    [["tank", 3, 1.6], ["grunt", 10, 0.5]],
+    [["flyer", 10, 0.5], ["runner", 10, 0.35]],
+    [["healer", 2, 1.4], ["grunt", 16, 0.4]],
+    [["tank", 5, 1.3], ["flyer", 8, 0.55]],
+    [["boss", 1, 0], ["grunt", 12, 0.5]],
+    [["runner", 22, 0.24]],
+    [["flyer", 14, 0.38], ["healer", 2, 1.2]],
+    [["tank", 8, 0.95], ["runner", 12, 0.3]],
+    [["healer", 4, 1.0], ["tank", 6, 1.0], ["grunt", 12, 0.4]],
+    [["boss", 1, 0], ["flyer", 12, 0.42]],
+    [["runner", 26, 0.2], ["flyer", 10, 0.45]],
+    [["tank", 10, 0.8], ["healer", 4, 1.1]],
+    [["flyer", 20, 0.3], ["tank", 6, 1.0]],
+    [["boss", 2, 2.5], ["runner", 20, 0.25]],
+    [["boss", 3, 3.0], ["tank", 10, 0.7], ["flyer", 14, 0.4], ["healer", 4, 1.0]]
+  ];
+
+  /** Enemy stats scale gently with wave number so late waves stay tense. */
+  function waveScale(wave) {
+    return 1 + (wave - 1) * 0.115;
+  }
+
+  /* ================================================================== *
+   * State
+   * ================================================================== */
+
+  var map, roadTiles, buildable, towers, enemies, shots, effects;
+  var gold, lives, wave, spawnQueue, spawning, running, speed, selectedKind,
+      selectedTower, hover, elapsed, leaked, score, flawless, everSpecialised;
+
+  P.hud({ gold: "Gold", lives: "Lives", wave: "Wave", score: "Score" });
+
+  function tileKey(x, y) { return x + "," + y; }
+
+  /** Walk the waypoint list to produce both the pixel path and the road tiles. */
+  function buildPath(def) {
+    var pts = [];
+    roadTiles = {};
+    for (var i = 0; i < def.path.length - 1; i++) {
+      var a = def.path[i], b = def.path[i + 1];
+      var dx = Math.sign(b[0] - a[0]), dy = Math.sign(b[1] - a[1]);
+      var steps = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
+      for (var s = 0; s < steps; s++) {
+        var tx = a[0] + dx * s, ty = a[1] + dy * s;
+        roadTiles[tileKey(tx, ty)] = true;
+        pts.push({ x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 });
+      }
+    }
+    var last = def.path[def.path.length - 1];
+    roadTiles[tileKey(last[0], last[1])] = true;
+    pts.push({ x: last[0] * TILE + TILE / 2, y: last[1] * TILE + TILE / 2 });
+    return pts;
+  }
+
+  var pathPts, pathLen, flyStart, flyEnd;
+
+  function measurePath() {
+    pathLen = 0;
+    for (var i = 0; i < pathPts.length - 1; i++) {
+      pathLen += Math.hypot(
+        pathPts[i + 1].x - pathPts[i].x,
+        pathPts[i + 1].y - pathPts[i].y
+      );
+    }
+    flyStart = pathPts[0];
+    flyEnd = pathPts[pathPts.length - 1];
+  }
+
+  /** Position along the road at distance `d` from the entrance. */
+  function pointAt(d) {
+    var acc = 0;
+    for (var i = 0; i < pathPts.length - 1; i++) {
+      var a = pathPts[i], b = pathPts[i + 1];
+      var seg = Math.hypot(b.x - a.x, b.y - a.y);
+      if (acc + seg >= d) {
+        var t = seg === 0 ? 0 : (d - acc) / seg;
+        return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      }
+      acc += seg;
+    }
+    return { x: flyEnd.x, y: flyEnd.y };
+  }
+
+  function startMap(index) {
+    map = MAPS[index];
+    pathPts = buildPath(map);
+    measurePath();
+
+    buildable = {};
+    for (var x = 0; x < COLS; x++) {
+      for (var y = 0; y < ROWS; y++) buildable[tileKey(x, y)] = true;
+    }
+    Object.keys(roadTiles).forEach(function (k) { buildable[k] = false; });
+    map.blocked.forEach(function (b) { buildable[tileKey(b[0], b[1])] = false; });
+
+    towers = []; enemies = []; shots = []; effects = [];
+    gold = 260; lives = 20; wave = 0; score = 0;
+    spawnQueue = []; spawning = false; leaked = 0;
+    elapsed = 0; speed = 1; selectedKind = null; selectedTower = null;
+    flawless = true; everSpecialised = false;
+    running = true;
+
+    document.getElementById("overlay").hidden = true;
+    syncHUD();
+    renderShop();
+    previewWave();
+    loop.start();
+  }
+
+  function syncHUD() {
+    P.set({ gold: gold, lives: lives, wave: wave + "/20", score: P.commas(score) });
+    renderShop();
+  }
+
+  /* ================================================================== *
+   * Waves
+   * ================================================================== */
+
+  function previewWave() {
+    var el = document.getElementById("wavepreview");
+    if (wave >= WAVES.length) { el.textContent = ""; return; }
+    var comp = WAVES[wave];
+    var parts = comp.map(function (g) {
+      return g[1] + "× " + ENEMIES[g[0]].name;
+    });
+    el.innerHTML = "Next: <b>" + parts.join(", ") + "</b>";
+  }
+
+  function sendWave() {
+    if (spawning || wave >= WAVES.length || !running) return;
+
+    // Calling early pays a bounty proportional to how much time is left.
+    if (enemies.length === 0 && wave > 0) {
+      var bonus = 18 + wave * 3;
+      gold += bonus;
+      P.toast("💰", "Early call bonus", "+" + bonus + " gold");
+    }
+
+    var comp = WAVES[wave];
+    wave++;
+    spawnQueue = [];
+    var t = 0;
+    comp.forEach(function (group) {
+      for (var i = 0; i < group[1]; i++) {
+        spawnQueue.push({ at: t, type: group[0] });
+        t += group[2];
+      }
+      t += 0.6;
+    });
+    spawnQueue.sort(function (a, b) { return a.at - b.at; });
+    spawning = true;
+    waveResolved = false;
+    spawnClock = 0;
+    syncHUD();
+    previewWave();
+  }
+
+  var spawnClock = 0;
+
+  function spawn(type) {
+    var def = ENEMIES[type];
+    var scale = waveScale(wave);
+    var e = {
+      type: type, def: def,
+      maxHp: Math.round(def.hp * scale),
+      hp: Math.round(def.hp * scale),
+      speed: def.speed * (1 + (wave - 1) * 0.012),
+      armor: def.armor + Math.floor((wave - 1) * 0.35),
+      r: def.r, flying: !!def.flying, boss: !!def.boss,
+      d: 0, slow: 0, slowFor: 0, stun: 0, burn: 0, burnFor: 0,
+      hitFlash: 0, dead: false
+    };
+    if (e.flying) {
+      e.fx = flyStart.x - 40;
+      e.fy = flyStart.y;
+    }
+    enemies.push(e);
+  }
+
+  /* ================================================================== *
+   * Combat
+   * ================================================================== */
+
+  function enemyPos(e) {
+    if (e.flying) return { x: e.fx, y: e.fy };
+    return pointAt(e.d);
+  }
+
+  function hurt(e, amount, pierceArmor, source) {
+    if (e.dead) return;
+    var armor = Math.max(0, e.armor - (pierceArmor || 0));
+    var dealt = Math.max(1, amount - armor);
+    if (source && source.bossBonus && (e.boss || e.type === "tank")) {
+      dealt *= source.bossBonus;
+    }
+    e.hp -= dealt;
+    e.hitFlash = 0.09;
+    if (e.hp > 0) return;
+
+    e.dead = true;
+    var reward = Math.round(e.def.gold * (1 + (wave - 1) * 0.05));
+    gold += reward;
+    score += reward * 2 + (e.boss ? 400 : 0);
+    var p = enemyPos(e);
+    effects.push({ kind: "pop", x: p.x, y: p.y, life: 0.35, max: 0.35, color: e.def.color });
+    sfx.play(e.boss ? 90 : 260, e.boss ? 0.3 : 0.05, "square", 0.02);
+    syncHUD();
+  }
+
+  function inRange(t, e, stats) {
+    if (e.dead) return false;
+    if (e.flying && !stats.air) return false;
+    if (!e.flying && !stats.ground) return false;
+    var p = enemyPos(e);
+    return Math.hypot(p.x - t.x, p.y - t.y) <= stats.range;
+  }
+
+  /** Target the enemy furthest along the road — the classic "first" policy. */
+  function pickTarget(t, stats) {
+    var best = null, bestD = -1;
+    for (var i = 0; i < enemies.length; i++) {
+      var e = enemies[i];
+      if (!inRange(t, e, stats)) continue;
+      var progress = e.flying ? e.fx : e.d;
+      if (progress > bestD) { bestD = progress; best = e; }
+    }
+    return best;
+  }
+
+  function splashDamage(x, y, radius, dmg, pierceArmor, source) {
+    for (var i = 0; i < enemies.length; i++) {
+      var e = enemies[i];
+      if (e.dead) continue;
+      var p = enemyPos(e);
+      if (Math.hypot(p.x - x, p.y - y) > radius) continue;
+      hurt(e, dmg, pierceArmor, source);
+      if (source && source.burn) { e.burn = source.burn; e.burnFor = 4; }
+    }
+    effects.push({ kind: "blast", x: x, y: y, r: radius, life: 0.28, max: 0.28 });
+  }
+
+  function applyOnHit(e, stats) {
+    if (stats.slow) {
+      e.slow = Math.max(e.slow, stats.slow);
+      e.slowFor = Math.max(e.slowFor, 1.4);
+    }
+    if (stats.freeze && Math.random() < stats.freeze) e.stun = Math.max(e.stun, 1);
+    if (stats.stun) e.stun = Math.max(e.stun, stats.stun);
+    if (stats.burn) { e.burn = stats.burn; e.burnFor = 4; }
+  }
+
+  function fireTower(t, stats) {
+    var target = pickTarget(t, stats);
+    if (!target) return;
+    t.cool = stats.rate;
+    var tp = enemyPos(target);
+
+    if (stats.kind === "tesla") {
+      var chain = [target];
+      var current = target;
+      var used = {};
+      used[enemies.indexOf(target)] = true;
+      for (var c = 0; c < stats.chains; c++) {
+        var cp = enemyPos(current);
+        var nearest = null, nd = 92, ni = -1;
+        for (var i = 0; i < enemies.length; i++) {
+          if (used[i] || enemies[i].dead) continue;
+          if (enemies[i].flying && !stats.air) continue;
+          var p = enemyPos(enemies[i]);
+          var dd = Math.hypot(p.x - cp.x, p.y - cp.y);
+          if (dd < nd) { nd = dd; nearest = enemies[i]; ni = i; }
+        }
+        if (!nearest) break;
+        used[ni] = true;
+        chain.push(nearest);
+        current = nearest;
+      }
+      var pts = [{ x: t.x, y: t.y }];
+      chain.forEach(function (e, idx) {
+        var p = enemyPos(e);
+        pts.push(p);
+        hurt(e, stats.damage * Math.pow(0.82, idx), stats.pierceArmor, stats);
+        applyOnHit(e, stats);
+      });
+      effects.push({ kind: "bolt", pts: pts, life: 0.14, max: 0.14 });
+      sfx.play(1200, 0.05, "sawtooth", 0.015);
+      return;
+    }
+
+    if (stats.kind === "sniper") {
+      if (stats.line) {
+        // Penetrator: everything on the ray takes the hit.
+        var ang = Math.atan2(tp.y - t.y, tp.x - t.x);
+        for (var j = 0; j < enemies.length; j++) {
+          var en = enemies[j];
+          if (en.dead) continue;
+          if (en.flying && !stats.air) continue;
+          var ep = enemyPos(en);
+          var rel = (ep.x - t.x) * Math.cos(ang) + (ep.y - t.y) * Math.sin(ang);
+          if (rel < 0 || rel > stats.range) continue;
+          var perp = Math.abs(-(ep.x - t.x) * Math.sin(ang) + (ep.y - t.y) * Math.cos(ang));
+          if (perp > en.r + 6) continue;
+          hurt(en, stats.damage, stats.pierceArmor, stats);
+          applyOnHit(en, stats);
+        }
+        effects.push({
+          kind: "beam", x1: t.x, y1: t.y,
+          x2: t.x + Math.cos(ang) * stats.range, y2: t.y + Math.sin(ang) * stats.range,
+          life: 0.16, max: 0.16, color: "#ffc091"
+        });
+      } else {
+        hurt(target, stats.damage, stats.pierceArmor, stats);
+        applyOnHit(target, stats);
+        effects.push({
+          kind: "beam", x1: t.x, y1: t.y, x2: tp.x, y2: tp.y,
+          life: 0.16, max: 0.16, color: "#ffc091"
+        });
+      }
+      sfx.play(180, 0.1, "sine", 0.02);
+      return;
+    }
+
+    // Everything else launches a travelling shell.
+    shots.push({
+      x: t.x, y: t.y, target: target, stats: stats,
+      speed: stats.kind === "mortar" ? 260 : 460,
+      color: stats.kind === "frost" ? "#38c8ff"
+           : stats.kind === "flak" ? "#ffc091"
+           : stats.kind === "mortar" ? "#ffd11a" : "#e8ebe6",
+      r: stats.kind === "mortar" ? 5 : 3.5
+    });
+    sfx.play(stats.kind === "mortar" ? 150 : 520, 0.04, "square", 0.012);
+  }
+
+  /* ================================================================== *
+   * Simulation
+   * ================================================================== */
+
+  function step(dt) {
+    if (!running) return;
+    var sub = dt * speed;
+    elapsed += sub;
+
+    if (spawning) {
+      spawnClock += sub;
+      while (spawnQueue.length && spawnQueue[0].at <= spawnClock) {
+        spawn(spawnQueue.shift().type);
+      }
+      if (!spawnQueue.length) spawning = false;
+    }
+
+    // --- enemies ---
+    for (var i = enemies.length - 1; i >= 0; i--) {
+      var e = enemies[i];
+      if (e.dead) { enemies.splice(i, 1); continue; }
+
+      if (e.hitFlash > 0) e.hitFlash -= sub;
+      if (e.slowFor > 0) { e.slowFor -= sub; if (e.slowFor <= 0) e.slow = 0; }
+      if (e.stun > 0) e.stun -= sub;
+      if (e.burnFor > 0) {
+        e.burnFor -= sub;
+        hurt(e, e.burn * sub, 99, null);
+        if (e.dead) { enemies.splice(i, 1); continue; }
+      }
+
+      // Cryo aura towers slow without needing to shoot.
+      for (var a = 0; a < towers.length; a++) {
+        var at = towers[a];
+        if (!at.stats.aura) continue;
+        if (!inRange(at, e, at.stats)) continue;
+        e.slow = Math.max(e.slow, at.stats.slow);
+        e.slowFor = Math.max(e.slowFor, 0.3);
+      }
+
+      if (e.stun <= 0) {
+        var v = e.speed * (1 - e.slow) * sub;
+        if (e.flying) {
+          var dx = flyEnd.x + 60 - e.fx, dy = flyEnd.y - e.fy;
+          var len = Math.hypot(dx, dy) || 1;
+          e.fx += (dx / len) * v;
+          e.fy += (dy / len) * v;
+          if (e.fx > flyEnd.x + 40) leak(e, i);
+        } else {
+          e.d += v;
+          if (e.d >= pathLen) leak(e, i);
+        }
+      }
+      if (e.dead) continue;
+
+      if (e.def.heal) {
+        e.healClock = (e.healClock || 0) + sub;
+        if (e.healClock > 1) {
+          e.healClock = 0;
+          var hp = enemyPos(e);
+          for (var h = 0; h < enemies.length; h++) {
+            var o = enemies[h];
+            if (o === e || o.dead || o.hp >= o.maxHp) continue;
+            var op = enemyPos(o);
+            if (Math.hypot(op.x - hp.x, op.y - hp.y) > 110) continue;
+            o.hp = Math.min(o.maxHp, o.hp + e.def.heal * waveScale(wave));
+            effects.push({ kind: "heal", x: op.x, y: op.y, life: 0.4, max: 0.4 });
+          }
+        }
+      }
+    }
+
+    // --- towers ---
+    for (var t = 0; t < towers.length; t++) {
+      var tw = towers[t];
+      tw.cool -= sub;
+      if (tw.cool <= 0) fireTower(tw, tw.stats);
+    }
+
+    // --- shells ---
+    for (var s = shots.length - 1; s >= 0; s--) {
+      var sh = shots[s];
+      var target = sh.target;
+      if (!target || target.dead) {
+        // Mortars still land where they were aimed.
+        if (sh.stats.splash) splashDamage(sh.x, sh.y, sh.stats.splash, sh.stats.damage, sh.stats.pierceArmor, sh.stats);
+        shots.splice(s, 1);
+        continue;
+      }
+      var p = enemyPos(target);
+      var ddx = p.x - sh.x, ddy = p.y - sh.y;
+      var dist = Math.hypot(ddx, ddy) || 1;
+      var travel = sh.speed * sub;
+      if (travel >= dist) {
+        if (sh.stats.splash) {
+          splashDamage(p.x, p.y, sh.stats.splash, sh.stats.damage, sh.stats.pierceArmor, sh.stats);
+        } else {
+          hurt(target, sh.stats.damage, sh.stats.pierceArmor, sh.stats);
+          applyOnHit(target, sh.stats);
+        }
+        shots.splice(s, 1);
+      } else {
+        sh.x += (ddx / dist) * travel;
+        sh.y += (ddy / dist) * travel;
+      }
+    }
+
+    for (var f = effects.length - 1; f >= 0; f--) {
+      effects[f].life -= sub;
+      if (effects[f].life <= 0) effects.splice(f, 1);
+    }
+
+    // --- wave / run resolution ---
+    // `waveResolved` latches until the next wave is sent; without it this
+    // block would pay the clear bounty on every single frame.
+    if (!waveResolved && !spawning && enemies.length === 0 && wave > 0) {
+      waveResolved = true;
+      if (wave >= WAVES.length) return win();
+      var reward = 40 + wave * 12;
+      gold += reward;
+      score += 250;
+      P.toast("✅", "Wave " + wave + " cleared", "+" + reward + " gold");
+      if (wave === 10) P.achieve("wave-10", "Holding", "Cleared wave 10");
+      syncHUD();
+      previewWave();
+    }
+  }
+
+  var waveResolved = true;
+
+  function leak(e, index) {
+    e.dead = true;
+    enemies.splice(index, 1);
+    lives -= e.boss ? 5 : 1;
+    leaked++;
+    flawless = false;
+    sfx.play(80, 0.25, "sawtooth", 0.05);
+    syncHUD();
+    if (lives <= 0) lose();
+  }
+
+  /* ================================================================== *
+   * Rendering
+   * ================================================================== */
+
+  function render() {
+    ctx.fillStyle = map ? map.tint : "#1f241a";
+    ctx.fillRect(0, 0, W, H);
+
+    // Ground tiles
+    for (var x = 0; x < COLS; x++) {
+      for (var y = 0; y < ROWS; y++) {
+        var k = tileKey(x, y);
+        if (roadTiles[k]) continue;
+        ctx.fillStyle = buildable[k] ? "rgba(23,30,50,.85)" : "rgba(10,13,24,.9)";
+        ctx.fillRect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
+        if (!buildable[k]) {
+          ctx.fillStyle = "rgba(80,92,130,.35)";
+          ctx.beginPath();
+          ctx.arc(x * TILE + TILE / 2, y * TILE + TILE / 2, 11, 0, 7);
+          ctx.fill();
+        }
+      }
+    }
+
+    // Road
+    ctx.lineWidth = TILE - 8;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#39422f";
+    ctx.beginPath();
+    ctx.moveTo(pathPts[0].x, pathPts[0].y);
+    for (var i = 1; i < pathPts.length; i++) ctx.lineTo(pathPts[i].x, pathPts[i].y);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(232,234,246,.16)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([10, 12]);
+    ctx.lineDashOffset = -elapsed * 30;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Entry / exit markers
+    ctx.fillStyle = "#2ead4b";
+    ctx.fillRect(pathPts[0].x - 6, pathPts[0].y - TILE / 2 + 4, 5, TILE - 8);
+    ctx.fillStyle = "#d03238";
+    ctx.fillRect(flyEnd.x + 2, flyEnd.y - TILE / 2 + 4, 5, TILE - 8);
+
+    // Placement preview
+    if (selectedKind && hover && hover.x >= 0 && hover.x < COLS && hover.y >= 0 && hover.y < ROWS) {
+      var ok = canPlace(hover.x, hover.y, selectedKind);
+      var stats = computeStats({ kind: selectedKind, level: 1, spec: null });
+      ctx.fillStyle = ok ? "rgba(52,211,153,.22)" : "rgba(251,113,133,.22)";
+      ctx.fillRect(hover.x * TILE, hover.y * TILE, TILE, TILE);
+      ctx.strokeStyle = ok ? "rgba(52,211,153,.55)" : "rgba(251,113,133,.55)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(hover.x * TILE + TILE / 2, hover.y * TILE + TILE / 2, stats.range, 0, 7);
+      ctx.stroke();
+    }
+
+    // Selected tower range
+    if (selectedTower) {
+      ctx.strokeStyle = "rgba(34,211,238,.6)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.arc(selectedTower.x, selectedTower.y, selectedTower.stats.range, 0, 7);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "#38c8ff";
+      ctx.strokeRect(selectedTower.tx * TILE + 1, selectedTower.ty * TILE + 1, TILE - 2, TILE - 2);
+    }
+
+    towers.forEach(drawTower);
+    enemies.forEach(drawEnemy);
+
+    shots.forEach(function (s) {
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, 7);
+      ctx.fill();
+    });
+
+    effects.forEach(drawEffect);
+  }
+
+  function drawTower(t) {
+    var cx = t.x, cy = t.y;
+    var def = TOWERS[t.kind];
+
+    ctx.fillStyle = "#191d13";
+    P.roundRect(ctx, cx - 19, cy - 19, 38, 38, 9);
+    ctx.fill();
+    ctx.strokeStyle = t.spec ? "#ffd11a" : "#4d5941";
+    ctx.lineWidth = t.spec ? 2.5 : 1.5;
+    ctx.stroke();
+
+    ctx.font = "20px system-ui";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(def.icon, cx, cy + 1);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+
+    // Level pips
+    for (var i = 0; i < t.level; i++) {
+      ctx.fillStyle = "#2ead4b";
+      ctx.fillRect(cx - 15 + i * 6, cy + 14, 4, 3);
+    }
+  }
+
+  function drawEnemy(e) {
+    var p = enemyPos(e);
+    if (e.flying) {
+      ctx.fillStyle = "rgba(0,0,0,.3)";
+      ctx.beginPath();
+      ctx.ellipse(p.x + 7, p.y + 13, e.r * 0.8, e.r * 0.35, 0, 0, 7);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = e.hitFlash > 0 ? "#ffffff" : e.def.color;
+    ctx.beginPath();
+    if (e.flying) {
+      ctx.moveTo(p.x + e.r, p.y);
+      ctx.lineTo(p.x - e.r, p.y - e.r * 0.8);
+      ctx.lineTo(p.x - e.r * 0.4, p.y);
+      ctx.lineTo(p.x - e.r, p.y + e.r * 0.8);
+      ctx.closePath();
+    } else {
+      ctx.arc(p.x, p.y, e.r, 0, 7);
+    }
+    ctx.fill();
+
+    if (e.armor > 4) {
+      ctx.strokeStyle = "rgba(232,234,246,.6)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    if (e.slow > 0) {
+      ctx.strokeStyle = "#38c8ff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, e.r + 3, 0, 7);
+      ctx.stroke();
+    }
+    if (e.burnFor > 0) {
+      ctx.fillStyle = "rgba(251,146,60,.5)";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y - e.r - 4, 3, 0, 7);
+      ctx.fill();
+    }
+    if (e.stun > 0) {
+      ctx.fillStyle = "#ffd11a";
+      ctx.fillText("✦", p.x - 4, p.y - e.r - 6);
+    }
+
+    var w = e.boss ? 44 : 26;
+    ctx.fillStyle = "rgba(5,6,12,.8)";
+    ctx.fillRect(p.x - w / 2, p.y - e.r - 9, w, 4);
+    ctx.fillStyle = e.hp / e.maxHp > 0.4 ? "#2ead4b" : "#d03238";
+    ctx.fillRect(p.x - w / 2, p.y - e.r - 9, w * Math.max(0, e.hp / e.maxHp), 4);
+  }
+
+  function drawEffect(f) {
+    var a = f.life / f.max;
+    ctx.globalAlpha = a;
+    if (f.kind === "blast") {
+      ctx.fillStyle = "rgba(251,191,36,.5)";
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r * (1.3 - a * 0.3), 0, 7);
+      ctx.fill();
+    } else if (f.kind === "beam") {
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(f.x1, f.y1);
+      ctx.lineTo(f.x2, f.y2);
+      ctx.stroke();
+    } else if (f.kind === "bolt") {
+      ctx.strokeStyle = "#38c8ff";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(f.pts[0].x, f.pts[0].y);
+      for (var i = 1; i < f.pts.length; i++) ctx.lineTo(f.pts[i].x, f.pts[i].y);
+      ctx.stroke();
+    } else if (f.kind === "pop") {
+      ctx.fillStyle = f.color;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, 16 * (1 - a) + 4, 0, 7);
+      ctx.fill();
+    } else if (f.kind === "heal") {
+      ctx.fillStyle = "#2ead4b";
+      ctx.fillText("+", f.x - 3, f.y - 16 * (1 - a));
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* ================================================================== *
+   * Shop / inspector UI
+   * ================================================================== */
+
+  function renderShop() {
+    var host = document.getElementById("shop");
+    if (host.childElementCount !== TOWER_ORDER.length) {
+      host.innerHTML = "";
+      TOWER_ORDER.forEach(function (kind) {
+        var def = TOWERS[kind];
+        var b = document.createElement("button");
+        b.className = "tw";
+        b.dataset.kind = kind;
+        b.innerHTML =
+          '<span class="air">' + (def.air ? (def.ground ? "" : "AIR") : "GND") + "</span>" +
+          '<span class="ic">' + def.icon + "</span>" +
+          def.name +
+          '<span class="cost">' + def.cost + "g</span>";
+        b.title = def.desc;
+        b.addEventListener("click", function () {
+          selectedKind = selectedKind === kind ? null : kind;
+          selectedTower = null;
+          showInspector();
+          renderShop();
+        });
+        host.appendChild(b);
+      });
+    }
+    [].forEach.call(host.children, function (b) {
+      var kind = b.dataset.kind;
+      b.classList.toggle("on", selectedKind === kind);
+      b.disabled = gold < TOWERS[kind].cost;
+    });
+  }
+
+  function showInspector() {
+    var el = document.getElementById("inspect");
+    if (!selectedTower) { el.hidden = true; return; }
+
+    var t = selectedTower;
+    var def = TOWERS[t.kind];
+    var s = t.stats;
+    var next = t.level < 5 ? computeStats({ kind: t.kind, level: t.level + 1, spec: t.spec }) : null;
+    var cost = upgradeCost(t);
+
+    function row(label, value, nextValue, better) {
+      var delta = "";
+      if (nextValue !== undefined && nextValue !== null) {
+        var up = better === "lower" ? nextValue < value : nextValue > value;
+        if (up) delta = ' <span class="up">→ ' + fmt(nextValue) + "</span>";
+      }
+      return "<dt>" + label + "</dt><dd>" + fmt(value) + delta + "</dd>";
+    }
+    function fmt(v) { return typeof v === "number" ? Math.round(v * 100) / 100 : v; }
+
+    var html =
+      "<h3>" + def.icon + " " + def.name + "</h3>" +
+      '<div class="lvl">Level ' + t.level + (t.spec ? " · " + specName(t) : "") + "</div>" +
+      "<dl>" +
+      row("Damage", s.damage, next && next.damage) +
+      row("Range", s.range, next && next.range) +
+      row("Reload", s.rate + "s", null) +
+      (s.splash ? row("Splash", s.splash, next && next.splash) : "") +
+      (s.slow ? row("Slow", Math.round(s.slow * 100) + "%", null) : "") +
+      (s.chains ? row("Chains", s.chains, next && next.chains) : "") +
+      "</dl>";
+
+    if (t.level >= 3 && !t.spec) {
+      html += '<div class="lvl">Choose a specialisation:</div><div class="spec">';
+      def.specs.forEach(function (sp, i) {
+        html += '<button class="pp-btn ghost" data-spec="' + i + '">' +
+          sp.name + "<small>" + sp.desc + "</small></button>";
+      });
+      html += "</div>";
+    } else if (t.level < 5) {
+      html += '<button class="pp-btn" data-act="up"' + (gold < cost ? " disabled" : "") +
+        ">Upgrade · " + cost + "g</button>";
+    } else {
+      html += '<div class="lvl">Maximum level.</div>';
+    }
+    html += '<button class="pp-btn ghost" data-act="sell">Sell · ' + sellValue(t) + "g</button>";
+
+    el.innerHTML = html;
+    el.hidden = false;
+
+    var upBtn = el.querySelector('[data-act="up"]');
+    if (upBtn) upBtn.addEventListener("click", function () {
+      if (gold < cost) return;
+      gold -= cost;
+      t.spent += cost;
+      t.level++;
+      t.stats = computeStats(t);
+      sfx.play(760, 0.1, "triangle", 0.03);
+      syncHUD();
+      showInspector();
+    });
+
+    el.querySelectorAll("[data-spec]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var sp = def.specs[parseInt(b.dataset.spec, 10)];
+        t.spec = sp.id;
+        t.stats = computeStats(t);
+        everSpecialised = true;
+        P.achieve("maxed", "Overengineered", "Fully specialised a tower");
+        P.toast(def.icon, sp.name, "Specialisation locked in");
+        sfx.play(980, 0.16, "triangle", 0.04);
+        showInspector();
+      });
+    });
+
+    var sellBtn = el.querySelector('[data-act="sell"]');
+    if (sellBtn) sellBtn.addEventListener("click", function () {
+      gold += sellValue(t);
+      towers.splice(towers.indexOf(t), 1);
+      selectedTower = null;
+      showInspector();
+      syncHUD();
+    });
+  }
+
+  function specName(t) {
+    var sp = TOWERS[t.kind].specs.filter(function (x) { return x.id === t.spec; })[0];
+    return sp ? sp.name : "";
+  }
+
+  /* ================================================================== *
+   * Placement
+   * ================================================================== */
+
+  function canPlace(tx, ty, kind) {
+    if (!buildable[tileKey(tx, ty)]) return false;
+    if (gold < TOWERS[kind].cost) return false;
+    for (var i = 0; i < towers.length; i++) {
+      if (towers[i].tx === tx && towers[i].ty === ty) return false;
+    }
+    return true;
+  }
+
+  function place(tx, ty, kind) {
+    var t = {
+      kind: kind, tx: tx, ty: ty,
+      x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2,
+      level: 1, spec: null, cool: 0, spent: TOWERS[kind].cost
+    };
+    t.stats = computeStats(t);
+    towers.push(t);
+    gold -= TOWERS[kind].cost;
+    sfx.play(440, 0.1, "triangle", 0.03);
+    syncHUD();
+  }
+
+  function towerAt(tx, ty) {
+    for (var i = 0; i < towers.length; i++) {
+      if (towers[i].tx === tx && towers[i].ty === ty) return towers[i];
+    }
+    return null;
+  }
+
+  function canvasTile(evt) {
+    var rect = canvas.getBoundingClientRect();
+    var cx = (evt.clientX - rect.left) * (W / rect.width);
+    var cy = (evt.clientY - rect.top) * (H / rect.height);
+    return { x: Math.floor(cx / TILE), y: Math.floor(cy / TILE) };
+  }
+
+  canvas.addEventListener("mousemove", function (e) { hover = canvasTile(e); });
+  canvas.addEventListener("mouseleave", function () { hover = null; });
+  canvas.addEventListener("click", function (e) {
+    if (!running) return;
+    var t = canvasTile(e);
+    if (t.x < 0 || t.x >= COLS || t.y < 0 || t.y >= ROWS) return;
+
+    var existing = towerAt(t.x, t.y);
+    if (existing) {
+      selectedTower = existing;
+      selectedKind = null;
+      renderShop();
+      showInspector();
+      return;
+    }
+    if (selectedKind && canPlace(t.x, t.y, selectedKind)) {
+      place(t.x, t.y, selectedKind);
+      if (gold < TOWERS[selectedKind].cost) { selectedKind = null; renderShop(); }
+      return;
+    }
+    selectedTower = null;
+    showInspector();
+  });
+
+  /* ================================================================== *
+   * Run lifecycle
+   * ================================================================== */
+
+  var loop = P.loop(step, render);
+
+  function finish(won) {
+    running = false;
+    loop.stop();
+    document.getElementById("inspect").hidden = true;
+
+    if (won) {
+      score += lives * 120;
+      P.achieve("wave-20", "The Line Holds", "Cleared all 20 waves");
+      if (flawless) P.achieve("flawless", "Not One Through", "Finished without losing a life");
+    }
+
+    var res = P.run(score, { map: map.name, wave: wave, lives: lives });
+
+    document.querySelector("#overlay .pp-title").textContent =
+      won ? "The line holds" : "Overrun";
+    document.getElementById("msg").textContent = won
+      ? "All twenty waves stopped on " + map.name + "."
+      : "They got through on wave " + wave + " of 20.";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      stat("Score", P.commas(score)) +
+      stat("Wave", wave + "/20") +
+      stat("Lives", Math.max(0, lives)) +
+      stat("Leaked", leaked) +
+      stat("Towers", towers.length) +
+      stat("Best", P.commas(res.best)) +
+      "</div>";
+    renderMapChooser();
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function win() { finish(true); }
+  function lose() { finish(false); }
+
+  function stat(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  function renderMapChooser() {
+    var host = document.getElementById("maps");
+    host.innerHTML = "";
+    MAPS.forEach(function (m, i) {
+      var b = document.createElement("button");
+      b.className = "pp-btn" + (i === 0 ? "" : " ghost");
+      b.innerHTML = m.name + " · " + m.difficulty + "<small>" + m.blurb + "</small>";
+      b.addEventListener("click", function () { startMap(i); });
+      host.appendChild(b);
+    });
+  }
+
+  document.getElementById("next").addEventListener("click", sendWave);
+  document.getElementById("speed").addEventListener("click", function () {
+    speed = speed === 1 ? 2 : speed === 2 ? 3 : 1;
+    this.textContent = (speed === 1 ? "▶ " : speed === 2 ? "▶▶ " : "▶▶▶ ") + speed + "×";
+  });
+  window.addEventListener("keydown", function (e) {
+    if (e.key === " ") { e.preventDefault(); sendWave(); }
+    if (e.key === "Escape") { selectedKind = null; selectedTower = null; renderShop(); showInspector(); }
+  });
+
+  // Boot into the map chooser.
+  map = MAPS[0];
+  pathPts = buildPath(map);
+  measurePath();
+  buildable = {};
+  towers = []; enemies = []; shots = []; effects = [];
+  gold = 0; lives = 20; wave = 0; score = 0; elapsed = 0; leaked = 0;
+  running = false;
+  renderMapChooser();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en" data-game="neon-serpent">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Neon Serpent</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #9fe870; --g2: #2ead4b; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 12px; }
+  .legend span {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 12px; font-size: 11px; font-weight: 700;
+  }
+  .legend i { font-style: normal; margin-right: 5px; }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div class="pp-touch" id="touch">
+  <div class="cluster"><button id="tl">◀</button><button id="tr">▶</button></div>
+  <div class="cluster"><button id="tu">▲</button><button id="td">▼</button></div>
+</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Neon Serpent</h1>
+    <p class="pp-sub" id="msg">Eat the pellets. Don't bite yourself. Mind the walls.</p>
+    <p class="pp-sub"><span class="pp-kbd">WASD</span> / <span class="pp-kbd">arrows</span> · swipe on touch</p>
+    <div id="finalStats"></div>
+    <div class="legend">
+      <span><i style="color:#ffd11a">●</i>Gold — grow &amp; score</span>
+      <span><i style="color:#38c8ff">●</i>Blue — slow time</span>
+      <span><i style="color:#2ead4b">●</i>Purple — phase through tail</span>
+      <span><i style="color:#e8ebe6">●</i>White — clear the walls</span>
+    </div>
+    <p></p>
+    <button class="pp-btn" id="go">Play</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var CELL = 24, COLS = 25, ROWS = 25;
+  var W = COLS * CELL, H = ROWS * CELL;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+
+  var PELLETS = {
+    gold:   { color: "#ffd11a", weight: 72 },
+    blue:   { color: "#38c8ff", weight: 12 },
+    purple: { color: "#2ead4b", weight: 10 },
+    white:  { color: "#e8ebe6", weight: 6 }
+  };
+
+  var snake, dir, pending, food, walls, particles;
+  var score, eaten, combo, comboTimer, bestCombo;
+  var slowFor, phaseFor, tickMs, acc, alive, running;
+
+  var input = P.input();
+  if (P.isTouch) {
+    document.getElementById("touch").classList.add("on");
+    input.bind(document.getElementById("tl"), "left");
+    input.bind(document.getElementById("tr"), "right");
+    input.bind(document.getElementById("tu"), "up");
+    input.bind(document.getElementById("td"), "down");
+  }
+
+  P.hud({ score: "Score", length: "Length", combo: "Combo", best: "Best" });
+
+  function key(x, y) { return x + "," + y; }
+
+  function occupied(x, y) {
+    if (walls[key(x, y)]) return true;
+    for (var i = 0; i < snake.length; i++) {
+      if (snake[i].x === x && snake[i].y === y) return true;
+    }
+    return false;
+  }
+
+  function pickPellet() {
+    var total = 0, k;
+    for (k in PELLETS) total += PELLETS[k].weight;
+    var roll = Math.random() * total;
+    for (k in PELLETS) {
+      roll -= PELLETS[k].weight;
+      if (roll <= 0) return k;
+    }
+    return "gold";
+  }
+
+  function placeFood() {
+    var tries = 0, x, y;
+    do {
+      x = (Math.random() * COLS) | 0;
+      y = (Math.random() * ROWS) | 0;
+      tries++;
+    } while (occupied(x, y) && tries < 500);
+    food = { x: x, y: y, kind: pickPellet(), born: performance.now() };
+  }
+
+  /** Drop a short wall segment somewhere clear of the snake's immediate path. */
+  function addWall() {
+    for (var attempt = 0; attempt < 60; attempt++) {
+      var horiz = Math.random() < 0.5;
+      var len = 3 + ((Math.random() * 3) | 0);
+      var x = (Math.random() * (COLS - (horiz ? len : 1))) | 0;
+      var y = (Math.random() * (ROWS - (horiz ? 1 : len))) | 0;
+
+      var cells = [], ok = true;
+      for (var i = 0; i < len; i++) {
+        var cx = horiz ? x + i : x;
+        var cy = horiz ? y : y + i;
+        // Keep a buffer around the head so a wall never appears on top of you.
+        if (Math.abs(cx - snake[0].x) < 4 && Math.abs(cy - snake[0].y) < 4) { ok = false; break; }
+        if (occupied(cx, cy) || (food && food.x === cx && food.y === cy)) { ok = false; break; }
+        cells.push([cx, cy]);
+      }
+      if (!ok) continue;
+      cells.forEach(function (c) { walls[key(c[0], c[1])] = true; });
+      return true;
+    }
+    return false;
+  }
+
+  function reset() {
+    snake = [{ x: 12, y: 12 }, { x: 11, y: 12 }, { x: 10, y: 12 }];
+    dir = { x: 1, y: 0 };
+    pending = [];
+    walls = {};
+    particles = [];
+    score = 0; eaten = 0; combo = 0; comboTimer = 0; bestCombo = 0;
+    slowFor = 0; phaseFor = 0;
+    tickMs = 130; acc = 0; alive = true;
+    placeFood();
+    syncHUD();
+  }
+
+  function syncHUD() {
+    P.set({
+      score: P.commas(score),
+      length: snake.length,
+      combo: combo > 1 ? "×" + combo : "—",
+      best: P.commas(P.best())
+    });
+  }
+
+  function turn(x, y) {
+    var head = pending.length ? pending[pending.length - 1] : dir;
+    if (head.x === -x && head.y === -y) return;
+    if (head.x === x && head.y === y) return;
+    if (pending.length < 2) pending.push({ x: x, y: y });
+  }
+
+  function burst(cx, cy, color, n) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      particles.push({
+        x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2,
+        vx: Math.cos(a) * P.rand(20, 110), vy: Math.sin(a) * P.rand(20, 110),
+        life: P.rand(0.25, 0.6), max: 0.6, color: color
+      });
+    }
+  }
+
+  function eat() {
+    eaten++;
+    combo++;
+    comboTimer = 2.6;
+    if (combo > bestCombo) bestCombo = combo;
+    if (combo >= 8) P.achieve("combo-8", "Chain Eater", "An 8-pellet combo");
+
+    var kind = food.kind;
+    var gain = 10 * Math.max(1, combo);
+
+    if (kind === "gold") {
+      if (tickMs > 62) tickMs -= 2.5;
+    } else if (kind === "blue") {
+      slowFor = 6;
+      gain += 20;
+      P.toast("🐌", "Slow time", "6 seconds");
+    } else if (kind === "purple") {
+      phaseFor = 6;
+      gain += 25;
+      P.toast("👻", "Phasing", "Pass through your tail");
+    } else if (kind === "white") {
+      var cleared = Object.keys(walls).length;
+      walls = {};
+      gain += 40 + cleared * 4;
+      P.toast("💥", "Walls cleared", cleared + " tiles");
+    }
+
+    score += gain;
+    burst(food.x, food.y, PELLETS[kind].color, 12);
+    sfx.play(kind === "gold" ? 780 : 1020, 0.07, "triangle", 0.03);
+
+    // A new wall every tenth pellet keeps the board changing under you.
+    if (eaten % 10 === 0) {
+      if (addWall()) P.toast("🧱", "New wall", "The arena changed");
+    }
+
+    if (snake.length >= 25) P.achieve("length-25", "Long Body", "Reached 25 segments");
+    if (score >= 1500) P.achieve("score-1500", "Neon Veteran", "Scored 1,500");
+
+    placeFood();
+    syncHUD();
+  }
+
+  function stepGame() {
+    if (pending.length) dir = pending.shift();
+    var head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+    if (head.x < 0 || head.y < 0 || head.x >= COLS || head.y >= ROWS) return die("wall");
+    if (walls[key(head.x, head.y)]) return die("wall");
+
+    if (phaseFor <= 0) {
+      for (var i = 0; i < snake.length - 1; i++) {
+        if (snake[i].x === head.x && snake[i].y === head.y) return die("self");
+      }
+    }
+
+    snake.unshift(head);
+    if (head.x === food.x && head.y === food.y) eat();
+    else snake.pop();
+  }
+
+  function die(cause) {
+    alive = false;
+    running = false;
+    loop.stop();
+    burst(snake[0].x, snake[0].y, "#d03238", 22);
+    sfx.play(120, 0.3, "sawtooth", 0.05);
+
+    var res = P.run(score, { length: snake.length, pellets: eaten, combo: bestCombo });
+
+    document.querySelector("#overlay .pp-title").textContent =
+      cause === "self" ? "You bit yourself" : "You hit a wall";
+    document.getElementById("msg").textContent = res.isBest
+      ? "New personal best."
+      : "Best so far: " + P.commas(res.best) + ".";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      s("Score", P.commas(score)) +
+      s("Length", snake.length) +
+      s("Pellets", eaten) +
+      s("Best combo", "×" + bestCombo) +
+      s("Walls", Object.keys(walls).length) +
+      s("Best", P.commas(res.best)) +
+      "</div>";
+    document.getElementById("go").textContent = "Play again";
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function s(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  function step(dt) {
+    if (!alive) return;
+
+    if (input.pressed("up")) turn(0, -1);
+    if (input.pressed("down")) turn(0, 1);
+    if (input.pressed("left")) turn(-1, 0);
+    if (input.pressed("right")) turn(1, 0);
+
+    if (slowFor > 0) slowFor -= dt;
+    if (phaseFor > 0) phaseFor -= dt;
+    if (comboTimer > 0) {
+      comboTimer -= dt;
+      if (comboTimer <= 0 && combo > 0) { combo = 0; syncHUD(); }
+    }
+
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var q = particles[i];
+      q.x += q.vx * dt; q.y += q.vy * dt;
+      q.life -= dt;
+      if (q.life <= 0) particles.splice(i, 1);
+    }
+
+    acc += dt * 1000 * (slowFor > 0 ? 0.55 : 1);
+    while (acc >= tickMs && alive) { stepGame(); acc -= tickMs; }
+  }
+
+  function render() {
+    ctx.fillStyle = "#14170f";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = "rgba(38,45,71,.5)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var i = 1; i < COLS; i++) {
+      ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, H);
+      ctx.moveTo(0, i * CELL); ctx.lineTo(W, i * CELL);
+    }
+    ctx.stroke();
+
+    Object.keys(walls).forEach(function (k) {
+      var p = k.split(",");
+      var wx = +p[0] * CELL, wy = +p[1] * CELL;
+      ctx.fillStyle = "#4d5941";
+      P.roundRect(ctx, wx + 1, wy + 1, CELL - 2, CELL - 2, 4);
+      ctx.fill();
+      ctx.fillStyle = "rgba(232,234,246,.14)";
+      ctx.fillRect(wx + 3, wy + 3, CELL - 6, 3);
+    });
+
+    if (food) {
+      var pulse = 3 + Math.sin(performance.now() / 200) * 2;
+      ctx.save();
+      ctx.shadowColor = PELLETS[food.kind].color;
+      ctx.shadowBlur = 12 + pulse;
+      ctx.fillStyle = PELLETS[food.kind].color;
+      ctx.beginPath();
+      ctx.arc(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, CELL / 2 - 4, 0, 7);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    for (var j = snake.length - 1; j >= 0; j--) {
+      var t = 1 - j / snake.length;
+      var phasing = phaseFor > 0;
+      ctx.globalAlpha = phasing && j > 0 ? 0.55 : 1;
+      ctx.fillStyle = phasing
+        ? "rgb(" + (168 + t * 40) + "," + (85 + t * 60) + ",247)"
+        : "rgb(" + (34 + t * 90) + "," + (211 - t * 60) + "," + (238 - t * 20) + ")";
+      ctx.shadowColor = phasing ? "#2ead4b" : "#38c8ff";
+      ctx.shadowBlur = j === 0 ? 18 : 6;
+      P.roundRect(ctx, snake[j].x * CELL + 2, snake[j].y * CELL + 2,
+                  CELL - 4, CELL - 4, j === 0 ? 7 : 5);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+
+    particles.forEach(function (q) {
+      ctx.globalAlpha = Math.max(0, q.life / q.max);
+      ctx.fillStyle = q.color;
+      ctx.fillRect(q.x - 2, q.y - 2, 4, 4);
+    });
+    ctx.globalAlpha = 1;
+
+    // Active power-up timers
+    var badges = [];
+    if (slowFor > 0) badges.push(["#38c8ff", "SLOW " + slowFor.toFixed(1)]);
+    if (phaseFor > 0) badges.push(["#2ead4b", "PHASE " + phaseFor.toFixed(1)]);
+    ctx.font = "800 11px system-ui";
+    badges.forEach(function (b, i) {
+      ctx.fillStyle = "rgba(11,14,26,.85)";
+      P.roundRect(ctx, 8, H - 30 - i * 22, 96, 18, 9);
+      ctx.fill();
+      ctx.fillStyle = b[0];
+      ctx.fillText(b[1], 16, H - 17 - i * 22);
+    });
+  }
+
+  var loop = P.loop(step, render);
+
+  var t0 = null;
+  document.addEventListener("touchstart", function (e) {
+    t0 = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }, { passive: true });
+  document.addEventListener("touchend", function (e) {
+    if (!t0) return;
+    var t = e.changedTouches[0];
+    var dx = t.clientX - t0.x, dy = t.clientY - t0.y;
+    t0 = null;
+    if (Math.abs(dx) < 18 && Math.abs(dy) < 18) return;
+    if (Math.abs(dx) > Math.abs(dy)) turn(dx > 0 ? 1 : -1, 0);
+    else turn(0, dy > 0 ? 1 : -1);
+  }, { passive: true });
+
+  document.getElementById("go").addEventListener("click", function () {
+    document.getElementById("overlay").hidden = true;
+    reset();
+    running = true;
+    loop.start();
+  });
+
+  reset();
+  render();
+})();
+</script>
+</body>
+</html>

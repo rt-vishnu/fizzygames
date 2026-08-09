@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en" data-game="tic-tac-tactics">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Tic Tac Tactics</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #ffc091; --g2: #b86700; }
+  html, body { touch-action: manipulation; }
+  #wrap { position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; padding: 14px; }
+  h1 { margin: 0; font-size: 21px; font-weight: 900;
+    background: linear-gradient(90deg, var(--g1), var(--g2));
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .opts { display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; }
+  .opts button { padding: 6px 13px; font-size: 12px; }
+
+  /* Classic board */
+  #classic { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    width: min(76vmin, 360px); aspect-ratio: 1; }
+  #classic[hidden] { display: none; }
+  .sq { background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    font-size: clamp(30px, 11vmin, 62px); font-weight: 900; color: var(--text);
+    cursor: pointer; display: grid; place-items: center; transition: background .15s; }
+  .sq:hover:not(.taken) { background: var(--surface-2); }
+  .sq.x { color: var(--positive-deep); } .sq.o { color: var(--warning-deep); }
+  .sq.win { background: rgba(168,85,247,.3); border-color: var(--g2); }
+
+  /* Ultimate board */
+  #ultimate { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px;
+    width: min(88vmin, 440px); aspect-ratio: 1; }
+  #ultimate[hidden] { display: none; }
+  .mini { position: relative; display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 2px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 4px; }
+  .mini.active { border-color: var(--g2); box-shadow: 0 0 0 2px rgba(168,85,247,.35); }
+  .mini.won { opacity: .95; }
+  .cellu { background: var(--surface-2); border: 0; border-radius: 4px; cursor: pointer;
+    font-size: clamp(11px, 3.2vmin, 20px); font-weight: 900; color: var(--text);
+    display: grid; place-items: center; aspect-ratio: 1; padding: 0; }
+  .cellu.x { color: var(--positive-deep); } .cellu.o { color: var(--warning-deep); }
+  .cellu:disabled { cursor: default; }
+  .claim { position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: clamp(30px, 9vmin, 60px); font-weight: 900; border-radius: 10px;
+    background: rgba(232, 235, 230, .93); pointer-events: none; }
+  .claim.x { color: var(--positive-deep); } .claim.o { color: var(--warning-deep); }
+
+  #status { font-size: 15px; font-weight: 700; min-height: 22px; text-align: center; }
+  #tally { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+  #tally b { color: var(--text); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>Tic Tac Tactics</h1>
+  <div class="opts" id="modeOpts">
+    <button class="pp-btn ghost on" data-mode="classic">Classic</button>
+    <button class="pp-btn ghost" data-mode="ultimate">Ultimate</button>
+  </div>
+  <div class="opts" id="diffOpts">
+    <button class="pp-btn ghost" data-d="easy">Easy</button>
+    <button class="pp-btn ghost on" data-d="medium">Medium</button>
+    <button class="pp-btn ghost" data-d="hard">Hard</button>
+  </div>
+  <div id="classic"></div>
+  <div id="ultimate" hidden></div>
+  <div id="status">Your move — you are ✕</div>
+  <div id="tally">Won <b id="w">0</b> · Drawn <b id="d">0</b> · Lost <b id="l">0</b> · Streak <b id="st">0</b></div>
+  <button class="pp-btn" id="reset">New round</button>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+
+  var mode = "classic", difficulty = "medium";
+  var tally = P.load("tally", { w: 0, d: 0, l: 0, streak: 0, best: 0 });
+
+  /* ---------- shared helpers ---------- */
+
+  function winnerOf(s) {
+    for (var i = 0; i < LINES.length; i++) {
+      var L = LINES[i];
+      if (s[L[0]] && s[L[0]] === s[L[1]] && s[L[1]] === s[L[2]]) {
+        return { who: s[L[0]], line: L };
+      }
+    }
+    return s.indexOf("") === -1 ? { who: "draw", line: null } : null;
+  }
+
+  function say(t) { document.getElementById("status").textContent = t; }
+
+  function renderTally() {
+    document.getElementById("w").textContent = tally.w;
+    document.getElementById("d").textContent = tally.d;
+    document.getElementById("l").textContent = tally.l;
+    document.getElementById("st").textContent = tally.streak;
+  }
+
+  function recordResult(result, label) {
+    if (result === "win") {
+      tally.w++;
+      tally.streak++;
+      if (tally.streak > tally.best) tally.best = tally.streak;
+      if (tally.streak >= 3) P.achieve("streak-3", "On A Run", "Won three games in a row");
+      if (mode === "classic" && difficulty === "hard") {
+        P.achieve("beat-hard", "Solved It", "Beat the Hard opponent");
+      }
+      if (mode === "ultimate") {
+        P.achieve("win-ultimate", "Two Boards Ahead", "Won a game of Ultimate");
+      }
+    } else if (result === "loss") {
+      tally.l++;
+      tally.streak = 0;
+    } else {
+      tally.d++;
+    }
+    P.save("tally", tally);
+    renderTally();
+
+    // Score rewards wins, weighted by mode and difficulty.
+    var base = result === "win" ? 500 : result === "draw" ? 150 : 40;
+    var mult = (mode === "ultimate" ? 2.2 : 1) *
+               (difficulty === "hard" ? 1.6 : difficulty === "medium" ? 1.2 : 1);
+    P.run(Math.round(base * mult + tally.streak * 120), {
+      mode: mode, difficulty: difficulty, result: label
+    });
+  }
+
+  /* ================================================================== *
+   * Classic
+   * ================================================================== */
+
+  var classicHost = document.getElementById("classic");
+  var cells = [];
+  var state, over;
+
+  for (var i = 0; i < 9; i++) {
+    var b = document.createElement("button");
+    b.className = "sq";
+    b.dataset.i = i;
+    b.addEventListener("click", onClassicClick);
+    classicHost.appendChild(b);
+    cells.push(b);
+  }
+
+  /** Minimax over the full tree — the board is small enough to solve outright. */
+  function minimax(s, turn) {
+    var res = winnerOf(s);
+    if (res) return { score: res.who === "O" ? 1 : res.who === "X" ? -1 : 0 };
+    var bestScore = turn === "O" ? -2 : 2, bestMove = -1;
+    for (var i = 0; i < 9; i++) {
+      if (s[i]) continue;
+      s[i] = turn;
+      var sc = minimax(s, turn === "O" ? "X" : "O").score;
+      s[i] = "";
+      if (turn === "O" ? sc > bestScore : sc < bestScore) { bestScore = sc; bestMove = i; }
+    }
+    return { score: bestScore, move: bestMove };
+  }
+
+  function classicAI() {
+    var free = [];
+    for (var i = 0; i < 9; i++) if (!state[i]) free.push(i);
+    if (!free.length) return -1;
+    var blunder = difficulty === "easy" ? 0.7 : difficulty === "medium" ? 0.22 : 0;
+    if (Math.random() < blunder) return P.pick(free);
+    return minimax(state.slice(), "O").move;
+  }
+
+  function renderClassic(res) {
+    for (var i = 0; i < 9; i++) {
+      cells[i].textContent = state[i] === "X" ? "✕" : state[i] === "O" ? "◯" : "";
+      cells[i].className = "sq" + (state[i] ? " taken " + state[i].toLowerCase() : "");
+    }
+    if (res && res.line) res.line.forEach(function (i) { cells[i].classList.add("win"); });
+  }
+
+  function finishClassic(res) {
+    over = true;
+    if (res.who === "X") { say("You win."); recordResult("win", "win"); }
+    else if (res.who === "O") { say("Opponent takes it."); recordResult("loss", "loss"); }
+    else { say("Draw — respectable."); recordResult("draw", "draw"); }
+    renderClassic(res);
+  }
+
+  function onClassicClick(e) {
+    var i = parseInt(e.currentTarget.dataset.i, 10);
+    if (over || state[i]) return;
+    state[i] = "X";
+    var res = winnerOf(state);
+    if (res) return finishClassic(res);
+    renderClassic();
+    say("Thinking…");
+    setTimeout(function () {
+      var m = classicAI();
+      if (m >= 0) state[m] = "O";
+      var r2 = winnerOf(state);
+      if (r2) return finishClassic(r2);
+      renderClassic();
+      say("Your move — you are ✕");
+    }, 240);
+  }
+
+  /* ================================================================== *
+   * Ultimate: nine small boards, and your move sends the opponent to the
+   * board matching the cell you played.
+   * ================================================================== */
+
+  var ultHost = document.getElementById("ultimate");
+  var boards, bigState, activeBoard, ultOver;
+  var miniEls = [], cellEls = [];
+
+  function buildUltimate() {
+    ultHost.innerHTML = "";
+    miniEls = []; cellEls = [];
+    for (var b = 0; b < 9; b++) {
+      var mini = document.createElement("div");
+      mini.className = "mini";
+      var row = [];
+      for (var c = 0; c < 9; c++) {
+        var cell = document.createElement("button");
+        cell.className = "cellu";
+        (function (bi, ci) {
+          cell.addEventListener("click", function () { onUltClick(bi, ci); });
+        })(b, c);
+        mini.appendChild(cell);
+        row.push(cell);
+      }
+      var claim = document.createElement("div");
+      claim.className = "claim";
+      claim.hidden = true;
+      mini.appendChild(claim);
+      ultHost.appendChild(mini);
+      miniEls.push({ el: mini, claim: claim });
+      cellEls.push(row);
+    }
+  }
+
+  function legalBoards() {
+    if (activeBoard !== null && !bigState[activeBoard] &&
+        boards[activeBoard].indexOf("") !== -1) {
+      return [activeBoard];
+    }
+    var out = [];
+    for (var b = 0; b < 9; b++) {
+      if (!bigState[b] && boards[b].indexOf("") !== -1) out.push(b);
+    }
+    return out;
+  }
+
+  function renderUltimate() {
+    var legal = legalBoards();
+    for (var b = 0; b < 9; b++) {
+      var isLegal = legal.indexOf(b) !== -1;
+      miniEls[b].el.classList.toggle("active", isLegal && !ultOver);
+      miniEls[b].el.classList.toggle("won", !!bigState[b]);
+      if (bigState[b]) {
+        miniEls[b].claim.hidden = false;
+        miniEls[b].claim.textContent = bigState[b] === "X" ? "✕" : bigState[b] === "O" ? "◯" : "–";
+        miniEls[b].claim.className = "claim " + bigState[b].toLowerCase();
+      } else {
+        miniEls[b].claim.hidden = true;
+      }
+      for (var c = 0; c < 9; c++) {
+        var v = boards[b][c];
+        var el = cellEls[b][c];
+        el.textContent = v === "X" ? "✕" : v === "O" ? "◯" : "";
+        el.className = "cellu" + (v ? " " + v.toLowerCase() : "");
+        el.disabled = ultOver || !!v || !isLegal;
+      }
+    }
+  }
+
+  function applyUlt(board, cell, mark) {
+    boards[board][cell] = mark;
+    var res = winnerOf(boards[board]);
+    if (res) bigState[board] = res.who === "draw" ? "-" : res.who;
+    activeBoard = cell;
+  }
+
+  /**
+   * The opponent scores a candidate move rather than searching the whole
+   * tree — Ultimate's branching factor makes full minimax impractical, and a
+   * heuristic that values claiming boards and denying lines plays well enough.
+   */
+  function ultAI() {
+    var legal = legalBoards();
+    var moves = [];
+    legal.forEach(function (b) {
+      for (var c = 0; c < 9; c++) if (!boards[b][c]) moves.push([b, c]);
+    });
+    if (!moves.length) return null;
+
+    var blunder = difficulty === "easy" ? 0.55 : difficulty === "medium" ? 0.2 : 0.04;
+    if (Math.random() < blunder) return P.pick(moves);
+
+    var best = null, bestScore = -Infinity;
+    moves.forEach(function (m) {
+      var b = m[0], c = m[1];
+      var score = 0;
+
+      boards[b][c] = "O";
+      var r = winnerOf(boards[b]);
+      if (r && r.who === "O") {
+        score += 60;
+        var big = bigState.slice();
+        big[b] = "O";
+        var bigWin = winnerOf(big.map(function (v) { return v === "-" ? "" : v || ""; }));
+        if (bigWin && bigWin.who === "O") score += 1000;
+      }
+      boards[b][c] = "X";
+      var rx = winnerOf(boards[b]);
+      if (rx && rx.who === "X") score += 40;   // deny the player this board
+      boards[b][c] = "";
+
+      if (c === 4) score += 4;
+      if (b === 4) score += 3;
+
+      // Avoid handing the player a free choice of board.
+      var sendTo = c;
+      if (bigState[sendTo] || boards[sendTo].indexOf("") === -1) score -= 25;
+      else {
+        var t = boards[sendTo].slice();
+        for (var i = 0; i < 9; i++) {
+          if (t[i]) continue;
+          t[i] = "X";
+          var w = winnerOf(t);
+          t[i] = "";
+          if (w && w.who === "X") { score -= 30; break; }
+        }
+      }
+      score += Math.random() * 3;
+      if (score > bestScore) { bestScore = score; best = m; }
+    });
+    return best;
+  }
+
+  function bigWinner() {
+    var flat = bigState.map(function (v) { return v === "-" ? "" : (v || ""); });
+    var res = winnerOf(flat);
+    if (res && res.who !== "draw") return res;
+    var anyLeft = false;
+    for (var b = 0; b < 9; b++) {
+      if (!bigState[b] && boards[b].indexOf("") !== -1) anyLeft = true;
+    }
+    if (!anyLeft) {
+      var xs = bigState.filter(function (v) { return v === "X"; }).length;
+      var os = bigState.filter(function (v) { return v === "O"; }).length;
+      return { who: xs > os ? "X" : os > xs ? "O" : "draw", line: null };
+    }
+    return null;
+  }
+
+  function onUltClick(b, c) {
+    if (ultOver) return;
+    if (legalBoards().indexOf(b) === -1 || boards[b][c]) return;
+
+    applyUlt(b, c, "X");
+    var res = bigWinner();
+    if (res) return finishUlt(res);
+    renderUltimate();
+    say("Thinking…");
+
+    setTimeout(function () {
+      var m = ultAI();
+      if (m) applyUlt(m[0], m[1], "O");
+      var r2 = bigWinner();
+      if (r2) return finishUlt(r2);
+      renderUltimate();
+      say("Your move — board " + (activeBoard === null ? "any" : activeBoard + 1));
+    }, 260);
+  }
+
+  function finishUlt(res) {
+    ultOver = true;
+    renderUltimate();
+    if (res.who === "X") { say("You win the big board."); recordResult("win", "win"); }
+    else if (res.who === "O") { say("Opponent takes the big board."); recordResult("loss", "loss"); }
+    else { say("Draw."); recordResult("draw", "draw"); }
+  }
+
+  /* ================================================================== *
+   * Wiring
+   * ================================================================== */
+
+  function reset() {
+    if (mode === "classic") {
+      state = ["", "", "", "", "", "", "", "", ""];
+      over = false;
+      renderClassic();
+      say("Your move — you are ✕");
+    } else {
+      boards = [];
+      for (var b = 0; b < 9; b++) boards.push(["", "", "", "", "", "", "", "", ""]);
+      bigState = new Array(9).fill(null);
+      activeBoard = null;
+      ultOver = false;
+      renderUltimate();
+      say("Your move — play anywhere");
+    }
+    renderTally();
+  }
+
+  document.querySelectorAll("#modeOpts button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll("#modeOpts button").forEach(function (x) {
+        x.classList.remove("on");
+      });
+      b.classList.add("on");
+      mode = b.dataset.mode;
+      document.getElementById("classic").hidden = mode !== "classic";
+      document.getElementById("ultimate").hidden = mode !== "ultimate";
+      reset();
+    });
+  });
+
+  document.querySelectorAll("#diffOpts button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll("#diffOpts button").forEach(function (x) {
+        x.classList.remove("on");
+      });
+      b.classList.add("on");
+      difficulty = b.dataset.d;
+      reset();
+    });
+  });
+
+  document.getElementById("reset").addEventListener("click", reset);
+
+  buildUltimate();
+  reset();
+})();
+</script>
+</body>
+</html>

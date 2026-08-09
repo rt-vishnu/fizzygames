@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en" data-game="star-runner">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Star Runner</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #38c8ff; --g2: #a72027; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); }
+  .shop { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+  @media (max-width: 560px) { .shop { grid-template-columns: 1fr 1fr; } }
+  .buy { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 8px; font: inherit; color: var(--text); cursor: pointer; text-align: center; }
+  .buy:hover:not(:disabled) { border-color: var(--g1); transform: translateY(-2px); }
+  .buy:disabled { opacity: .4; cursor: not-allowed; }
+  .buy .ic { font-size: 22px; display: block; }
+  .buy .nm { font-weight: 800; font-size: 12px; margin-top: 4px; }
+  .buy .ds { font-size: 10px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  .buy .pr { font-size: 11px; color: var(--accent); font-weight: 800; margin-top: 5px; }
+  #salvage { color: var(--accent); font-weight: 800; }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div class="pp-touch" id="touch">
+  <div class="cluster"><button id="bl">◀</button><button id="br">▶</button></div>
+  <div class="cluster"><button id="bt">▲</button><button id="bf">🔥</button></div>
+</div>
+
+<div class="pp-overlay" id="shopScreen" hidden>
+  <div>
+    <h2 class="pp-title" style="font-size:clamp(24px,5vw,36px)">Wave <span id="shopWave">1</span> cleared</h2>
+    <p class="pp-sub">Salvage: <span id="salvage">0</span></p>
+    <div class="shop" id="shopItems"></div>
+    <p></p>
+    <button class="pp-btn" id="launch">Next wave</button>
+  </div>
+</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Star Runner</h1>
+    <p class="pp-sub" id="msg">Split the asteroids. Spend the salvage. Watch for hunters.</p>
+    <p class="pp-sub">
+      <span class="pp-kbd">←</span><span class="pp-kbd">→</span> rotate ·
+      <span class="pp-kbd">↑</span> thrust · <span class="pp-kbd">space</span> fire ·
+      <span class="pp-kbd">X</span> bomb
+    </p>
+    <div id="finalStats"></div>
+    <p></p>
+    <button class="pp-btn" id="go">Launch</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var W = 960, H = 540;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+
+  var ship, rocks, shots, foes, foeShots, bits;
+  var score, lives, wave, salvage, bombs, hunterKills, running, invuln;
+
+  var UPGRADES = [
+    { id: "spread", ic: "🔱", nm: "Spread",   ds: "+1 projectile",        cost: 45, max: 4,
+      apply: function () { ship.shots++; } },
+    { id: "rapid",  ic: "⏱️", nm: "Rapid",    ds: "+20% fire rate",       cost: 35, max: 6,
+      apply: function () { ship.cooldown *= 0.8; } },
+    { id: "power",  ic: "💥", nm: "Warhead",  ds: "+30% bullet damage",   cost: 40, max: 5,
+      apply: function () { ship.damage *= 1.3; } },
+    { id: "shield", ic: "🛡️", nm: "Shielding", ds: "+1 life",             cost: 70, max: 4,
+      apply: function () { lives++; } },
+    { id: "engine", ic: "🚀", nm: "Engines",  ds: "+15% thrust and turn", cost: 30, max: 5,
+      apply: function () { ship.thrust *= 1.15; ship.turn *= 1.12; } },
+    { id: "bomb",   ic: "💣", nm: "Bomb",     ds: "+1 screen-clearing bomb", cost: 50, max: 9,
+      apply: function () { bombs++; } }
+  ];
+  var bought = {};
+
+  var input = P.input({ x: "bomb", X: "bomb" });
+  if (P.isTouch) {
+    document.getElementById("touch").classList.add("on");
+    input.bind(document.getElementById("bl"), "left");
+    input.bind(document.getElementById("br"), "right");
+    input.bind(document.getElementById("bt"), "up");
+    input.bind(document.getElementById("bf"), "fire");
+  }
+
+  P.hud({ score: "Score", wave: "Wave", lives: "Lives", bombs: "Bombs", salvage: "Salvage" });
+
+  function syncHUD() {
+    P.set({ score: P.commas(score), wave: wave, lives: lives, bombs: bombs, salvage: salvage });
+  }
+
+  function reset() {
+    ship = {
+      x: W / 2, y: H / 2, vx: 0, vy: 0, a: -Math.PI / 2, cool: 0,
+      shots: 1, cooldown: 0.26, damage: 10, thrust: 0.17, turn: 0.062
+    };
+    rocks = []; shots = []; foes = []; foeShots = []; bits = [];
+    score = 0; lives = 3; wave = 1; salvage = 0; bombs = 1;
+    hunterKills = 0; invuln = 120; bought = {};
+    spawnWave();
+    syncHUD();
+  }
+
+  function wrap(o) {
+    if (o.x < -20) o.x = W + 20;
+    if (o.x > W + 20) o.x = -20;
+    if (o.y < -20) o.y = H + 20;
+    if (o.y > H + 20) o.y = -20;
+  }
+
+  function makeRock(x, y, size) {
+    var speed = (0.5 + Math.random() * 0.9) * (1 + wave * 0.05) * (4 - size) * 0.6;
+    var a = Math.random() * Math.PI * 2;
+    var pts = [];
+    for (var i = 0; i < 9; i++) pts.push(0.72 + Math.random() * 0.5);
+    return {
+      x: x, y: y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+      size: size, r: size * 15, spin: (Math.random() - 0.5) * 0.04, rot: 0,
+      hp: size * 12 * (1 + wave * 0.06), pts: pts
+    };
+  }
+
+  function makeHunter() {
+    var edge = (Math.random() * 4) | 0;
+    var x = edge === 0 ? -20 : edge === 1 ? W + 20 : Math.random() * W;
+    var y = edge === 2 ? -20 : edge === 3 ? H + 20 : Math.random() * H;
+    return {
+      x: x, y: y, vx: 0, vy: 0, a: 0, r: 13,
+      hp: 26 + wave * 5, cool: P.rand(0.5, 1.6),
+      speed: 55 + wave * 3
+    };
+  }
+
+  function spawnWave() {
+    var count = 3 + Math.min(wave, 8);
+    for (var i = 0; i < count; i++) {
+      var x, y;
+      do { x = Math.random() * W; y = Math.random() * H; }
+      while (Math.hypot(x - ship.x, y - ship.y) < 190);
+      rocks.push(makeRock(x, y, 3));
+    }
+    // Hunters shoot back, and arrive from wave 4.
+    var hunters = wave >= 4 ? Math.min(1 + Math.floor((wave - 4) / 2), 5) : 0;
+    for (var h = 0; h < hunters; h++) foes.push(makeHunter());
+    invuln = 100;
+  }
+
+  function burst(x, y, color, n) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      bits.push({
+        x: x, y: y, vx: Math.cos(a) * P.rand(30, 220), vy: Math.sin(a) * P.rand(30, 220),
+        life: P.rand(0.25, 0.6), max: 0.6, color: color
+      });
+    }
+  }
+
+  function fire() {
+    if (ship.cool > 0) return;
+    ship.cool = ship.cooldown;
+    var spread = ship.shots > 1 ? 0.13 * (ship.shots - 1) : 0;
+    for (var i = 0; i < ship.shots; i++) {
+      var t = ship.shots === 1 ? 0 : (i / (ship.shots - 1) - 0.5) * 2;
+      var a = ship.a + t * spread;
+      shots.push({
+        x: ship.x + Math.cos(a) * 16, y: ship.y + Math.sin(a) * 16,
+        vx: Math.cos(a) * 480 + ship.vx * 60, vy: Math.sin(a) * 480 + ship.vy * 60,
+        life: 1.05, dmg: ship.damage
+      });
+    }
+    sfx.play(660, 0.04, "square", 0.02);
+  }
+
+  function detonate() {
+    if (bombs <= 0) return;
+    bombs--;
+    burst(ship.x, ship.y, "#ffd11a", 50);
+    for (var i = rocks.length - 1; i >= 0; i--) {
+      if (Math.hypot(rocks[i].x - ship.x, rocks[i].y - ship.y) > 300) continue;
+      destroyRock(i);
+    }
+    for (var j = foes.length - 1; j >= 0; j--) {
+      if (Math.hypot(foes[j].x - ship.x, foes[j].y - ship.y) > 300) continue;
+      killHunter(j);
+    }
+    sfx.play(90, 0.4, "sawtooth", 0.06);
+    syncHUD();
+  }
+
+  function destroyRock(i) {
+    var k = rocks[i];
+    rocks.splice(i, 1);
+    score += k.size * 25;
+    salvage += k.size * 3;
+    burst(k.x, k.y, "#9fe870", 12);
+    if (k.size > 1) {
+      rocks.push(makeRock(k.x, k.y, k.size - 1));
+      rocks.push(makeRock(k.x, k.y, k.size - 1));
+    }
+  }
+
+  function killHunter(j) {
+    var f = foes[j];
+    foes.splice(j, 1);
+    score += 220;
+    salvage += 14;
+    hunterKills++;
+    if (hunterKills >= 10) P.achieve("hunter-10", "Dogfighter", "Destroyed ten hunters");
+    burst(f.x, f.y, "#d03238", 20);
+  }
+
+  function hitShip() {
+    if (invuln > 0) return;
+    lives--;
+    burst(ship.x, ship.y, "#d03238", 30);
+    syncHUD();
+    if (lives <= 0) return finish();
+    ship.x = W / 2; ship.y = H / 2; ship.vx = ship.vy = 0;
+    invuln = 130;
+  }
+
+  function step(dt) {
+    if (!running) return;
+
+    if (input.down("left")) ship.a -= ship.turn * 60 * dt;
+    if (input.down("right")) ship.a += ship.turn * 60 * dt;
+    if (input.down("up")) {
+      ship.vx += Math.cos(ship.a) * ship.thrust * 60 * dt;
+      ship.vy += Math.sin(ship.a) * ship.thrust * 60 * dt;
+      bits.push({
+        x: ship.x - Math.cos(ship.a) * 14, y: ship.y - Math.sin(ship.a) * 14,
+        vx: -Math.cos(ship.a) * 90, vy: -Math.sin(ship.a) * 90,
+        life: 0.3, max: 0.3, color: "#ffd11a"
+      });
+    }
+    ship.vx *= 0.994; ship.vy *= 0.994;
+    ship.x += ship.vx * 60 * dt; ship.y += ship.vy * 60 * dt;
+    wrap(ship);
+    if (ship.cool > 0) ship.cool -= dt;
+    if (invuln > 0) invuln--;
+    if (input.down("fire")) fire();
+    if (input.pressed("bomb")) detonate();
+
+    for (var s = shots.length - 1; s >= 0; s--) {
+      var b = shots[s];
+      b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+      wrap(b);
+      if (b.life <= 0) { shots.splice(s, 1); continue; }
+
+      var hit = false;
+      for (var r = rocks.length - 1; r >= 0; r--) {
+        if (Math.hypot(b.x - rocks[r].x, b.y - rocks[r].y) > rocks[r].r) continue;
+        rocks[r].hp -= b.dmg;
+        burst(b.x, b.y, "#9fe870", 3);
+        if (rocks[r].hp <= 0) destroyRock(r);
+        shots.splice(s, 1);
+        hit = true;
+        break;
+      }
+      if (hit) continue;
+      for (var f = foes.length - 1; f >= 0; f--) {
+        if (Math.hypot(b.x - foes[f].x, b.y - foes[f].y) > foes[f].r) continue;
+        foes[f].hp -= b.dmg;
+        burst(b.x, b.y, "#d03238", 4);
+        if (foes[f].hp <= 0) killHunter(f);
+        shots.splice(s, 1);
+        break;
+      }
+    }
+
+    for (var i = 0; i < rocks.length; i++) {
+      var k = rocks[i];
+      k.x += k.vx * 60 * dt; k.y += k.vy * 60 * dt; k.rot += k.spin;
+      wrap(k);
+      if (Math.hypot(ship.x - k.x, ship.y - k.y) < k.r + 10) hitShip();
+    }
+
+    for (var h = 0; h < foes.length; h++) {
+      var fo = foes[h];
+      var dx = ship.x - fo.x, dy = ship.y - fo.y;
+      var d = Math.hypot(dx, dy) || 1;
+      fo.a = Math.atan2(dy, dx);
+      // Hold a firing distance rather than ramming.
+      var want = d > 260 ? 1 : d < 160 ? -1 : 0;
+      fo.vx += (dx / d) * want * fo.speed * dt;
+      fo.vy += (dy / d) * want * fo.speed * dt;
+      fo.vx *= 0.96; fo.vy *= 0.96;
+      fo.x += fo.vx * dt; fo.y += fo.vy * dt;
+      wrap(fo);
+
+      fo.cool -= dt;
+      if (fo.cool <= 0 && d < 420) {
+        fo.cool = Math.max(0.55, 1.5 - wave * 0.05);
+        foeShots.push({
+          x: fo.x, y: fo.y,
+          vx: Math.cos(fo.a) * 260, vy: Math.sin(fo.a) * 260, life: 2
+        });
+        sfx.play(220, 0.05, "sawtooth", 0.015);
+      }
+      if (Math.hypot(ship.x - fo.x, ship.y - fo.y) < fo.r + 10) hitShip();
+    }
+
+    for (var e = foeShots.length - 1; e >= 0; e--) {
+      var es = foeShots[e];
+      es.x += es.vx * dt; es.y += es.vy * dt; es.life -= dt;
+      wrap(es);
+      if (es.life <= 0) { foeShots.splice(e, 1); continue; }
+      if (Math.hypot(es.x - ship.x, es.y - ship.y) < 11) {
+        foeShots.splice(e, 1);
+        hitShip();
+      }
+    }
+
+    for (var p = bits.length - 1; p >= 0; p--) {
+      var q = bits[p];
+      q.x += q.vx * dt; q.y += q.vy * dt;
+      q.life -= dt;
+      if (q.life <= 0) bits.splice(p, 1);
+    }
+
+    if (rocks.length === 0 && foes.length === 0) openShop();
+    syncHUD();
+  }
+
+  function render() {
+    ctx.fillStyle = "#14170f";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(255,255,255,.35)";
+    for (var i = 0; i < 70; i++) ctx.fillRect((i * 173) % W, (i * 311) % H, 1.6, 1.6);
+
+    bits.forEach(function (q) {
+      ctx.globalAlpha = Math.max(0, q.life / q.max);
+      ctx.fillStyle = q.color;
+      ctx.fillRect(q.x, q.y, 3, 3);
+    });
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = "#9fe870";
+    ctx.lineWidth = 2;
+    rocks.forEach(function (k) {
+      ctx.save();
+      ctx.translate(k.x, k.y);
+      ctx.rotate(k.rot);
+      ctx.beginPath();
+      for (var j = 0; j < k.pts.length; j++) {
+        var a = (j / k.pts.length) * Math.PI * 2, rad = k.r * k.pts[j];
+        if (j === 0) ctx.moveTo(Math.cos(a) * rad, Math.sin(a) * rad);
+        else ctx.lineTo(Math.cos(a) * rad, Math.sin(a) * rad);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    foes.forEach(function (f) {
+      ctx.save();
+      ctx.translate(f.x, f.y);
+      ctx.rotate(f.a);
+      ctx.fillStyle = "#d03238";
+      ctx.beginPath();
+      ctx.moveTo(14, 0); ctx.lineTo(-10, -9); ctx.lineTo(-4, 0); ctx.lineTo(-10, 9);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = "rgba(5,6,12,.7)";
+      ctx.fillRect(f.x - 14, f.y - f.r - 8, 28, 3);
+      ctx.fillStyle = "#d03238";
+      ctx.fillRect(f.x - 14, f.y - f.r - 8, 28 * Math.max(0, f.hp / (26 + wave * 5)), 3);
+    });
+
+    ctx.fillStyle = "#38c8ff";
+    shots.forEach(function (b) { ctx.fillRect(b.x - 2, b.y - 2, 4, 4); });
+    ctx.fillStyle = "#d03238";
+    foeShots.forEach(function (b) { ctx.fillRect(b.x - 2.5, b.y - 2.5, 5, 5); });
+
+    if (invuln <= 0 || Math.floor(invuln / 6) % 2 === 0) {
+      ctx.save();
+      ctx.translate(ship.x, ship.y);
+      ctx.rotate(ship.a);
+      ctx.strokeStyle = "#e8ebe6";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(16, 0); ctx.lineTo(-11, -9); ctx.lineTo(-6, 0); ctx.lineTo(-11, 9);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  var loop = P.loop(step, render);
+
+  /* ---- shop between waves ---- */
+
+  function openShop() {
+    running = false;
+    loop.stop();
+    if (wave === 5) P.achieve("wave-5", "Still Flying", "Reached wave 5");
+    if (wave === 10) P.achieve("wave-10", "Deep Field", "Reached wave 10");
+    score += 150 * wave;
+
+    document.getElementById("shopWave").textContent = wave;
+    renderShop();
+    document.getElementById("shopScreen").hidden = false;
+  }
+
+  function renderShop() {
+    document.getElementById("salvage").textContent = salvage;
+    var host = document.getElementById("shopItems");
+    host.innerHTML = "";
+    UPGRADES.forEach(function (u) {
+      var owned = bought[u.id] || 0;
+      var cost = Math.round(u.cost * (1 + owned * 0.45));
+      var b = document.createElement("button");
+      b.className = "buy";
+      b.disabled = salvage < cost || owned >= u.max;
+      b.innerHTML =
+        '<span class="ic">' + u.ic + "</span>" +
+        '<span class="nm">' + u.nm + "</span>" +
+        '<span class="ds">' + u.ds + "</span>" +
+        '<span class="pr">' + (owned >= u.max ? "MAX" : cost + " salvage") + "</span>";
+      b.addEventListener("click", function () {
+        if (salvage < cost || owned >= u.max) return;
+        salvage -= cost;
+        bought[u.id] = owned + 1;
+        u.apply();
+        sfx.play(900, 0.1, "triangle", 0.04);
+        renderShop();
+        syncHUD();
+      });
+      host.appendChild(b);
+    });
+  }
+
+  document.getElementById("launch").addEventListener("click", function () {
+    document.getElementById("shopScreen").hidden = true;
+    wave++;
+    spawnWave();
+    syncHUD();
+    running = true;
+    loop.start();
+  });
+
+  function finish() {
+    running = false;
+    loop.stop();
+    document.getElementById("shopScreen").hidden = true;
+    var res = P.run(score, { wave: wave, hunters: hunterKills });
+
+    document.querySelector("#overlay .pp-title").textContent = "Ship lost";
+    document.getElementById("msg").textContent = res.isBest
+      ? "New personal best."
+      : "Best so far: " + P.commas(res.best) + ".";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      s("Score", P.commas(score)) +
+      s("Wave", wave) +
+      s("Hunters", hunterKills) +
+      s("Best", P.commas(res.best)) +
+      "</div>";
+    document.getElementById("go").textContent = "Launch again";
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function s(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  document.getElementById("go").addEventListener("click", function () {
+    document.getElementById("overlay").hidden = true;
+    reset();
+    running = true;
+    loop.start();
+  });
+
+  reset();
+  running = false;
+  render();
+})();
+</script>
+</body>
+</html>

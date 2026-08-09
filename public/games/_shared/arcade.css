@@ -1,0 +1,271 @@
+/* Shared chrome for every Playpit game.
+   Brand palette. Each game sets --g1/--g2 to its own accent pair; everything
+   else below is common. The canvas playfield stays dark (--field) because
+   glow, particles and trails need a dark ground — all surrounding UI is light.
+   --line and --field are derived, not from the palette. */
+:root {
+  --g1: #9fe870;
+  --g2: #2ead4b;
+
+  --brand: #9fe870;
+  --brand-active: #cdffad;
+  --brand-neutral: #c5edab;
+  --brand-pale: #e2f6d5;
+
+  --canvas: #ffffff;
+  --canvas-soft: #e8ebe6;
+
+  --ink: #0e0f0c;
+  --ink-deep: #163300;
+  --body: #454745;
+  --mute: #868685;
+
+  --positive: #2ead4b;
+  --positive-deep: #054d28;
+  --warning: #ffd11a;
+  --warning-deep: #b86700;
+  --warning-content: #4a3b1c;
+  --negative: #d03238;
+  --negative-deep: #a72027;
+  --negative-bg: #320707;
+  --accent-orange: #ffc091;
+  --accent-cyan: #38c8ff;
+
+  --line: #d6dbd3;
+  --field: #14170f;
+
+  /* Older aliases kept so game-specific rules stay valid. */
+  --surface: #ffffff;
+  --surface-2: #e8ebe6;
+  --text: #0e0f0c;
+  --muted: #454745;
+  --accent: #b86700;
+  --good: #2ead4b;
+  --bad: #d03238;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--canvas-soft);
+  color: var(--ink);
+  overflow: hidden;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+
+canvas { display: block; }
+
+.pp-stage {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+.pp-stage canvas {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+}
+
+/* ---- HUD ---- */
+.pp-hud {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  pointer-events: none;
+  z-index: 5;
+  flex-wrap: wrap;
+}
+.pp-chip {
+  background: rgba(255, 255, 255, .92);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  backdrop-filter: blur(6px);
+}
+.pp-chip span { color: var(--mute); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .08em; }
+.pp-chip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.pp-chip.hot b { color: var(--positive-deep); }
+
+/* ---- Overlays ---- */
+.pp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  text-align: center;
+  background: rgba(232, 235, 230, .93);
+  backdrop-filter: blur(6px);
+  overflow-y: auto;
+}
+.pp-overlay[hidden] { display: none; }
+.pp-overlay > div { width: min(560px, 100%); }
+
+.pp-title {
+  margin: 0 0 4px;
+  font-size: clamp(30px, 7vw, 50px);
+  font-weight: 900;
+  letter-spacing: -.02em;
+  color: var(--ink-deep);
+}
+.pp-sub { margin: 4px 0 14px; color: var(--body); font-size: 14px; line-height: 1.6; }
+
+.pp-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 13px 32px;
+  font: inherit;
+  font-weight: 800;
+  color: var(--ink-deep);
+  cursor: pointer;
+  background: var(--brand);
+  transition: background .15s, transform .1s;
+}
+.pp-btn:hover { background: var(--brand-active); }
+.pp-btn:active { transform: scale(.97); }
+.pp-btn.ghost {
+  background: var(--canvas);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 10px 22px;
+  font-weight: 700;
+}
+.pp-btn.ghost:hover { background: var(--brand-pale); }
+.pp-btn.ghost.on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--ink-deep);
+}
+.pp-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.pp-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
+.pp-kbd {
+  display: inline-block;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.pp-panel {
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  text-align: left;
+}
+
+/* Stat grid used on game-over screens. */
+.pp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+}
+.pp-stat {
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 8px;
+}
+.pp-stat span {
+  display: block;
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.pp-stat b { font-size: 20px; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+/* ---- Toasts (achievements, level-ups) ---- */
+.pp-toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.pp-toast {
+  background: var(--canvas);
+  border: 1px solid var(--brand);
+  border-radius: 12px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-shadow: 0 10px 30px rgba(14, 15, 12, .12);
+  animation: pp-toast-in .3s ease both;
+}
+.pp-toast small { display: block; color: var(--body); font-weight: 600; }
+@keyframes pp-toast-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+.pp-toast.out { animation: pp-toast-out .3s ease both; }
+@keyframes pp-toast-out {
+  to { opacity: 0; transform: translateY(-8px); }
+}
+
+/* ---- Touch controls ---- */
+.pp-touch {
+  position: fixed;
+  bottom: 12px;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: none;
+  justify-content: space-between;
+  padding: 0 14px;
+  pointer-events: none;
+}
+.pp-touch.on { display: flex; }
+.pp-touch .cluster { display: flex; gap: 10px; pointer-events: auto; }
+.pp-touch button {
+  width: 62px;
+  height: 62px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .9);
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 800;
+}
+.pp-touch button:active { background: var(--brand); }
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-toast { animation: none; }
+}

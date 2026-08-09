@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en" data-game="memory-vault">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Memory Vault</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #9fe870; --g2: #2ead4b; }
+  html, body { touch-action: manipulation; }
+  #wrap { position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; padding: 14px; }
+  #top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; justify-content: center; }
+  #title { font-size: 19px; font-weight: 900; margin-right: 4px;
+    background: linear-gradient(90deg, var(--g1), var(--g2));
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 4px 11px; text-align: center; min-width: 56px; }
+  .stat span { display: block; font-size: 9px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); }
+  .stat b { font-size: 15px; font-variant-numeric: tabular-nums; }
+  .opts button { padding: 6px 12px; font-size: 12px; }
+  #grid { display: grid; gap: 9px; }
+  .card { position: relative; aspect-ratio: 1; border-radius: 12px; cursor: pointer;
+    perspective: 600px; background: none; border: 0; padding: 0; }
+  .inner { position: absolute; inset: 0; transition: transform .35s; transform-style: preserve-3d; }
+  .card.up .inner, .card.done .inner { transform: rotateY(180deg); }
+  .face { position: absolute; inset: 0; border-radius: 12px; display: grid;
+    place-items: center; backface-visibility: hidden; font-size: clamp(17px, 4.4vmin, 34px); }
+  .back { background: linear-gradient(135deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--line); }
+  .back::after { content: '?'; color: #4d5941; font-weight: 900; font-size: 62%; }
+  .front { background: linear-gradient(135deg, var(--g2), var(--g1)); transform: rotateY(180deg); }
+  .card.done { opacity: .45; cursor: default; }
+  #msg { font-size: 12px; color: var(--muted); min-height: 18px; }
+  #clock { height: 6px; width: min(90vmin, 560px); background: var(--surface-2);
+    border-radius: 3px; overflow: hidden; }
+  #clock[hidden] { display: none; }
+  #clock i { display: block; height: 100%; background: linear-gradient(90deg, var(--g1), #ffd11a); }
+  #win { position: fixed; inset: 0; display: grid; place-items: center;
+    background: rgba(232, 235, 230, .93); text-align: center; padding: 20px; z-index: 20; }
+  #win[hidden] { display: none; }
+  #win h2 { font-size: 30px; font-weight: 900; margin: 0 0 4px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="title">Memory Vault</div>
+    <div class="stat"><span>Score</span><b id="score">0</b></div>
+    <div class="stat"><span>Moves</span><b id="moves">0</b></div>
+    <div class="stat"><span>Pairs</span><b id="pairs">0/8</b></div>
+    <div class="stat"><span>Streak</span><b id="streak">—</b></div>
+    <div class="stat"><span>Best</span><b id="best">—</b></div>
+    <span class="opts">
+      <button class="pp-btn ghost on" data-n="4">4×4</button>
+      <button class="pp-btn ghost" data-n="6">6×6</button>
+      <button class="pp-btn ghost" id="timed">⏱ Timed</button>
+    </span>
+  </div>
+  <div id="clock" hidden><i id="clockFill" style="width:100%"></i></div>
+  <div id="grid"></div>
+  <div id="msg">Flip two cards. Matching pairs stay open.</div>
+</div>
+
+<div id="win" hidden>
+  <div>
+    <h2 id="winTitle">Vault cleared</h2>
+    <p class="pp-sub" id="winMsg"></p>
+    <div id="finalStats"></div>
+    <p></p>
+    <button class="pp-btn" id="again">Play again</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var ICONS = ["🚀","🍀","👾","🎲","⚡","🔥","🌙","🎧","🍄","🧊","🪐","🎯",
+               "🐙","🍭","⚙️","🛸","🔮","🥁","🌵","🎺","🧭","🍉"];
+
+  var grid = document.getElementById("grid");
+  var N = 4, timed = false;
+  var deck, open, moves, matched, lock, score, streak, bestStreak;
+  var timeLeft, timeTotal, ticking, startedAt;
+
+  function bestKey() { return "best-" + N + (timed ? "-timed" : ""); }
+
+  function showBest() {
+    var b = P.load(bestKey(), null);
+    document.getElementById("best").textContent =
+      b === null ? "—" : (timed ? b + " pts" : b + " moves");
+  }
+
+  function build() {
+    var pairs = (N * N) / 2;
+    var picks = P.shuffle(ICONS.slice()).slice(0, pairs);
+    deck = P.shuffle(picks.concat(picks));
+    open = []; moves = 0; matched = 0; lock = false;
+    score = 0; streak = 0; bestStreak = 0;
+    timeTotal = N === 4 ? 55 : 130;
+    timeLeft = timeTotal;
+    ticking = timed;
+    startedAt = performance.now();
+
+    grid.innerHTML = "";
+    grid.style.gridTemplateColumns = "repeat(" + N + ", 1fr)";
+    sizeGrid();
+
+    deck.forEach(function (icon, i) {
+      var card = document.createElement("button");
+      card.className = "card";
+      card.dataset.i = i;
+      card.innerHTML =
+        '<span class="inner"><span class="face back"></span>' +
+        '<span class="face front">' + icon + "</span></span>";
+      card.addEventListener("click", function () { flip(card, i); });
+      grid.appendChild(card);
+    });
+
+    document.getElementById("clock").hidden = !timed;
+    document.getElementById("msg").textContent = timed
+      ? "Beat the clock. Streaks add bonus points."
+      : "Flip two cards. Matching pairs stay open.";
+    document.getElementById("win").hidden = true;
+    sync();
+    showBest();
+    if (timed) loop.start(); else loop.stop();
+  }
+
+  function sizeGrid() {
+    var side = Math.min(window.innerWidth - 36, window.innerHeight - 200, 560);
+    grid.style.width = side + "px";
+  }
+
+  function sync() {
+    document.getElementById("score").textContent = P.commas(score);
+    document.getElementById("moves").textContent = moves;
+    document.getElementById("pairs").textContent = matched + "/" + (N * N / 2);
+    document.getElementById("streak").textContent = streak > 1 ? "×" + streak : "—";
+  }
+
+  function flip(card, i) {
+    if (lock || card.classList.contains("up") || card.classList.contains("done")) return;
+    if (timed && !ticking) return;
+    card.classList.add("up");
+    open.push({ card: card, i: i });
+    if (open.length < 2) return;
+
+    moves++;
+    var a = open[0], b = open[1];
+
+    if (deck[a.i] === deck[b.i]) {
+      a.card.classList.add("done");
+      b.card.classList.add("done");
+      open = [];
+      matched++;
+      streak++;
+      if (streak > bestStreak) bestStreak = streak;
+      if (streak >= 6) P.achieve("streak-6", "Photographic", "Six pairs in a row");
+      score += 100 * streak;
+      if (timed) timeLeft = Math.min(timeTotal, timeLeft + 2);
+      sync();
+      if (matched === (N * N) / 2) win();
+    } else {
+      streak = 0;
+      lock = true;
+      sync();
+      setTimeout(function () {
+        a.card.classList.remove("up");
+        b.card.classList.remove("up");
+        open = [];
+        lock = false;
+      }, 620);
+    }
+  }
+
+  function win() {
+    ticking = false;
+    loop.stop();
+    var seconds = (performance.now() - startedAt) / 1000;
+    var bonus = timed ? Math.round(timeLeft * 40) : Math.max(0, (N * N * 40) - moves * 25);
+    score += bonus;
+
+    if (N === 6) P.achieve("clear-6", "Big Board", "Cleared the 6×6 grid");
+    if (timed) P.achieve("beat-clock", "Against The Clock", "Won a timed round");
+
+    var metric = timed ? score : moves;
+    var prev = P.load(bestKey(), null);
+    var better = prev === null || (timed ? metric > prev : metric < prev);
+    if (better) P.save(bestKey(), metric);
+    showBest();
+
+    var res = P.run(score, {
+      grid: N + "x" + N, mode: timed ? "timed" : "classic", moves: moves
+    });
+
+    document.getElementById("winTitle").textContent = "Vault cleared";
+    document.getElementById("winMsg").textContent =
+      "Cleared in " + moves + " moves and " + seconds.toFixed(1) + "s.";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      s("Score", P.commas(score)) +
+      s("Moves", moves) +
+      s("Best streak", "×" + bestStreak) +
+      s("Bonus", P.commas(bonus)) +
+      s("Best", P.commas(res.best)) +
+      "</div>";
+    document.getElementById("win").hidden = false;
+  }
+
+  function timeout() {
+    ticking = false;
+    loop.stop();
+    var res = P.run(score, { grid: N + "x" + N, mode: "timed", moves: moves });
+    document.getElementById("winTitle").textContent = "Out of time";
+    document.getElementById("winMsg").textContent =
+      "You matched " + matched + " of " + (N * N / 2) + " pairs.";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      s("Score", P.commas(score)) +
+      s("Pairs", matched) +
+      s("Moves", moves) +
+      s("Best", P.commas(res.best)) +
+      "</div>";
+    document.getElementById("win").hidden = false;
+  }
+
+  function s(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  var loop = P.loop(function (dt) {
+    if (!ticking) return;
+    timeLeft -= dt;
+    document.getElementById("clockFill").style.width =
+      Math.max(0, (timeLeft / timeTotal) * 100) + "%";
+    if (timeLeft <= 0) timeout();
+  }, null);
+
+  document.querySelectorAll(".opts [data-n]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll(".opts [data-n]").forEach(function (x) {
+        x.classList.remove("on");
+      });
+      b.classList.add("on");
+      N = parseInt(b.dataset.n, 10);
+      build();
+    });
+  });
+  document.getElementById("timed").addEventListener("click", function () {
+    timed = !timed;
+    this.classList.toggle("on", timed);
+    build();
+  });
+  document.getElementById("again").addEventListener("click", build);
+  window.addEventListener("resize", sizeGrid);
+
+  build();
+})();
+</script>
+</body>
+</html>

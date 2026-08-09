@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="en" data-game="glow-runner">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Glow Runner</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #ffc091; --g2: #2ead4b; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); }
+
+  .levels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 16px; }
+  @media (max-width: 560px) { .levels { grid-template-columns: repeat(2, 1fr); } }
+  .lv {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 8px; font: inherit; color: var(--text); cursor: pointer; text-align: center;
+    transition: border-color .12s, transform .1s;
+  }
+  .lv:hover:not(:disabled) { border-color: var(--g1); transform: translateY(-2px); }
+  .lv:disabled { opacity: .35; cursor: not-allowed; }
+  .lv .n { font-size: 20px; font-weight: 900; }
+  .lv .nm { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .lv .t { font-size: 11px; margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .lv .t.par { color: var(--accent); }
+  .lv .c { font-size: 10px; color: var(--muted); }
+  .lv.done { border-color: var(--good); }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div class="pp-touch" id="touch">
+  <div class="cluster"><button id="tl">◀</button><button id="tr">▶</button></div>
+  <div class="cluster"><button id="tj">▲</button></div>
+</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Glow Runner</h1>
+    <p class="pp-sub" id="msg">
+      Find the key, open the door, don't touch the spikes.
+    </p>
+    <p class="pp-sub">
+      <span class="pp-kbd">←</span><span class="pp-kbd">→</span> run ·
+      <span class="pp-kbd">space</span> jump (hold for height) ·
+      <span class="pp-kbd">R</span> restart · <span class="pp-kbd">Esc</span> level select
+    </p>
+    <div id="finalStats"></div>
+    <div class="levels" id="levels"></div>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var TILE = 32, VIEW_W = 30, VIEW_H = 16;
+  var W = VIEW_W * TILE, H = VIEW_H * TILE + 28;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+
+  /* ================================================================== *
+   * Levels
+   *
+   * Legend:  # solid   = one-way platform   ^ spikes   ~ lava
+   *          o coin    K key   D door       C checkpoint
+   *          P start   E patroller          . empty
+   * Every row must be the same length. Movers are listed separately so a
+   * platform can travel without being baked into the grid.
+   * ================================================================== */
+
+  var LEVELS = [
+    {
+      name: "First Light", par: 22,
+      rows: [
+        "..............................................................",
+        "..............................................................",
+        "..............................................................",
+        "...........................................ooo................",
+        "..........................................#####...............",
+        "..............................................................",
+        ".................ooo..........................................",
+        "................#####...........####..........................",
+        "..........................................................D...",
+        "......oo..............................................#####...",
+        ".....####.........................####........................",
+        "..................................................K...........",
+        "..P..........................................#######..........",
+        "###########......####....######...............................",
+        "##########################################################.###",
+        "##############################################################"
+      ],
+      movers: []
+    },
+    {
+      name: "Mind the Gap", par: 30,
+      rows: [
+        "..............................................................",
+        "..............................................................",
+        "...................................................ooo........",
+        "..................................................#####.......",
+        "..........................ooo.................................",
+        ".........................#####................................",
+        "..............................................................",
+        "........ooo...................................................",
+        ".......#####...............................o..........D.......",
+        "..........................................###.....#######.....",
+        "...................o..........................................",
+        "..P...............###.................K.......................",
+        "#####........................####...#####.....................",
+        "#####..^^^...####...^^^^...........................^^^^.......",
+        "#####.#####.#####..######..######..#######....#############...",
+        "##############################################################"
+      ],
+      movers: []
+    },
+    {
+      name: "Company", par: 36,
+      rows: [
+        "..............................................................",
+        "..............................................................",
+        "..............................................ooo.............",
+        ".............................................#####............",
+        "................ooo...........................................",
+        "...............#####...........E..............................",
+        "..........................############........................",
+        "...........o..................................................",
+        "..........###...........................o.........K...D.......",
+        "................................E......###.......########.....",
+        "..P..........E................................................",
+        "#######...########...#######..................................",
+        "#######...########...#######...####...####...#########........",
+        "#######...########...#######..................................",
+        "##############################################################",
+        "##############################################################"
+      ],
+      movers: []
+    },
+    {
+      name: "Passenger", par: 40,
+      rows: [
+        "..............................................................",
+        "..............................................................",
+        "..........................ooo.................................",
+        ".........................#####...............ooo..............",
+        "............................................#####.............",
+        "..............................................................",
+        "........ooo...................................................",
+        ".......#####.............................................D....",
+        "....................................E................#####....",
+        ".........................####...#########.....................",
+        "..P.......................................K...................",
+        "#####.................................#######.................",
+        "#####...^^^^^^^^..............................^^^^^^..........",
+        "#####..#########..............................#######.........",
+        "##############................................################",
+        "##############################################################"
+      ],
+      movers: [
+        { x: 15, y: 11, w: 3, dx: 1, dy: 0, dist: 6, speed: 2.2 },
+        { x: 33, y: 13, w: 3, dx: 0, dy: -1, dist: 4, speed: 1.8 }
+      ]
+    },
+    {
+      name: "Stepladder", par: 44,
+      rows: [
+        "..............................................................",
+        "...........................................o.......D..........",
+        "..........................................===...########......",
+        "..............................................................",
+        "...................................o..........................",
+        "..................................===.........................",
+        "...........................o..................................",
+        "..........................===.................K...............",
+        "...................o.....................========.............",
+        "..................===.........................................",
+        "...........o..................E...............................",
+        "..........===........####################.....................",
+        "..P...........................................................",
+        "#####....^^^^^................................................",
+        "#####...#######...............................................",
+        "##############################################################"
+      ],
+      movers: [
+        { x: 44, y: 12, w: 3, dx: 0, dy: -1, dist: 3, speed: 1.6 }
+      ]
+    },
+    {
+      name: "The Long Way", par: 55,
+      rows: [
+        "..............................................................",
+        ".................ooo..........................................",
+        "................#####.........................ooo.............",
+        ".............................................#####............",
+        "......o.......................E...............................",
+        ".....===...............################.......................",
+        "..............................................................",
+        "..........................o..................o................",
+        ".........................===................===...........D...",
+        "..............E...........................................###.",
+        "..P.......C........................K..........................",
+        "#######################........########.......................",
+        "..............................................................",
+        "~~~~~~~~~~~~~~..........^^^^^.................^^^^^...........",
+        "##############..........#####.................#####...........",
+        "##############################################################"
+      ],
+      movers: [
+        { x: 22, y: 12, w: 4, dx: 1, dy: 0, dist: 8, speed: 2.6 },
+        { x: 46, y: 12, w: 4, dx: 1, dy: 0, dist: 7, speed: 3.0 }
+      ]
+    },
+    {
+      name: "Needlework", par: 60,
+      rows: [
+        "..............................................................",
+        "..........o...........o...........o...........o...............",
+        ".........===.........===.........===.........===...........D..",
+        "..........................................................###.",
+        "..............................................................",
+        "...............E..............E...............................",
+        "........#########......#########......#########...............",
+        "..............................................................",
+        "..............................................................",
+        "..P....C..............................................K.......",
+        "#####.####...^^^^..####...^^^^..####...^^^^..####..######.....",
+        "##########..######.####..######.####..######.####.............",
+        "..............................................................",
+        "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+        "##############################################################",
+        "##############################################################"
+      ],
+      movers: [
+        { x: 18, y: 9, w: 3, dx: 0, dy: -1, dist: 3, speed: 2.2 },
+        { x: 30, y: 9, w: 3, dx: 0, dy: -1, dist: 3, speed: 2.6 }
+      ]
+    },
+    {
+      name: "Summit", par: 75,
+      rows: [
+        "..........................................................D...",
+        ".......................................................#####..",
+        "..............................o...............................",
+        ".............................===..............................",
+        "...................E..........................K...............",
+        "............#############...........======================....",
+        "..............................................................",
+        "..........o...................o...............................",
+        ".........===.................===..............................",
+        "....C.........................................................",
+        "..P.......................E...................................",
+        "#####...........#######################.......................",
+        "..............................................................",
+        "......^^^^^^^^..........................^^^^^^^^^^............",
+        "#####.########..........................##########............",
+        "#####################...........##############################"
+      ],
+      movers: [
+        { x: 21, y: 12, w: 3, dx: 1, dy: 0, dist: 9, speed: 3.2 },
+        { x: 40, y: 12, w: 3, dx: 0, dy: -1, dist: 5, speed: 2.4 },
+        { x: 50, y: 9, w: 3, dx: 1, dy: 0, dist: 6, speed: 2.8 }
+      ]
+    }
+  ];
+
+  /* ================================================================== *
+   * Save file
+   * ================================================================== */
+
+  var save = P.load("progress", { best: {}, coins: {}, cleared: {} });
+
+  function saveProgress() { P.save("progress", save); }
+  function unlockedCount() { return Object.keys(save.cleared).length; }
+  function isUnlocked(i) { return i === 0 || save.cleared[i - 1]; }
+
+  /* ================================================================== *
+   * Runtime state
+   * ================================================================== */
+
+  var level, levelIndex, grid, gw, gh;
+  var player, coins, enemies, movers, key, door, checkpoints, particles;
+  var camera, timer, running, totalCoins, spawnPoint, deaths;
+
+  var input = P.input({ " ": "jump", ArrowUp: "jump", w: "jump", W: "jump", r: "restart", R: "restart" });
+
+  if (P.isTouch) {
+    document.getElementById("touch").classList.add("on");
+    input.bind(document.getElementById("tl"), "left");
+    input.bind(document.getElementById("tr"), "right");
+    input.bind(document.getElementById("tj"), "jump");
+  }
+
+  P.hud({ level: "Level", coins: "Coins", time: "Time", key: "Key" });
+
+  function solidAt(tx, ty) {
+    if (tx < 0 || tx >= gw || ty < 0) return true;
+    if (ty >= gh) return false;
+    return grid[ty][tx] === "#";
+  }
+  function oneWayAt(tx, ty) {
+    if (tx < 0 || tx >= gw || ty < 0 || ty >= gh) return false;
+    return grid[ty][tx] === "=";
+  }
+  function hazardAt(tx, ty) {
+    if (tx < 0 || tx >= gw || ty < 0 || ty >= gh) return false;
+    var ch = grid[ty][tx];
+    return ch === "^" || ch === "~";
+  }
+
+  function loadLevel(index) {
+    levelIndex = index;
+    level = LEVELS[index];
+    grid = level.rows.map(function (r) { return r.split(""); });
+    gh = grid.length;
+    gw = grid[0].length;
+
+    coins = []; enemies = []; checkpoints = []; particles = [];
+    key = null; door = null;
+
+    for (var y = 0; y < gh; y++) {
+      for (var x = 0; x < gw; x++) {
+        var ch = grid[y][x];
+        if (ch === "o") { coins.push({ x: x, y: y, got: false }); grid[y][x] = "."; }
+        else if (ch === "K") { key = { x: x, y: y, got: false }; grid[y][x] = "."; }
+        else if (ch === "D") { door = { x: x, y: y }; grid[y][x] = "."; }
+        else if (ch === "C") { checkpoints.push({ x: x, y: y, hit: false }); grid[y][x] = "."; }
+        else if (ch === "P") { spawnPoint = { x: x * TILE + 4, y: y * TILE }; grid[y][x] = "."; }
+        else if (ch === "E") {
+          enemies.push({
+            x: x * TILE, y: y * TILE, w: 22, h: 24,
+            vx: 42, home: x * TILE, dead: false
+          });
+          grid[y][x] = ".";
+        } else if (ch === "_") { grid[y][x] = "."; }
+      }
+    }
+
+    movers = (level.movers || []).map(function (m) {
+      return {
+        ox: m.x * TILE, oy: m.y * TILE, w: m.w * TILE, h: 12,
+        x: m.x * TILE, y: m.y * TILE,
+        dx: m.dx, dy: m.dy, dist: m.dist * TILE, speed: m.speed * 30,
+        t: 0, dir: 1, px: 0, py: 0
+      };
+    });
+
+    totalCoins = coins.length;
+    timer = 0;
+    deaths = 0;
+    respawn(true);
+    running = true;
+    document.getElementById("overlay").hidden = true;
+    syncHUD();
+    loop.start();
+  }
+
+  function respawn(full) {
+    var s = spawnPoint;
+    // Respawn at the last checkpoint touched, if any.
+    for (var i = checkpoints.length - 1; i >= 0; i--) {
+      if (checkpoints[i].hit) { s = { x: checkpoints[i].x * TILE + 4, y: checkpoints[i].y * TILE }; break; }
+    }
+    player = {
+      x: s.x, y: s.y, w: 20, h: 26, vx: 0, vy: 0,
+      onGround: false, coyote: 0, buffer: 0, face: 1,
+      dead: false, deadFor: 0, jumpHeld: false
+    };
+    if (full) {
+      coins.forEach(function (c) { c.got = false; });
+      if (key) key.got = false;
+      checkpoints.forEach(function (c) { c.hit = false; });
+    }
+    camera = { x: 0, y: 0 };
+  }
+
+  function syncHUD() {
+    P.set({
+      level: (levelIndex + 1) + "/" + LEVELS.length,
+      coins: coins.filter(function (c) { return c.got; }).length + "/" + totalCoins,
+      time: timer.toFixed(1) + "s",
+      key: key ? (key.got ? "✓" : "—") : "—"
+    });
+  }
+
+  /* ================================================================== *
+   * Physics
+   * ================================================================== */
+
+  var GRAVITY = 1750, MOVE = 210, ACCEL = 1900, FRICTION = 1500;
+  // Apex height is v²/2g ≈ 117px — comfortably over a three-tile climb (96px)
+  // and short of four (128px). Every level is built to that budget.
+  var JUMP_V = -640, COYOTE = 0.1, BUFFER = 0.12;
+
+  function moveAxis(p, dx, dy) {
+    // Axis-separated sweep: move, then push out of anything overlapped.
+    p.x += dx;
+    p.y += dy;
+
+    var left = Math.floor(p.x / TILE);
+    var right = Math.floor((p.x + p.w - 1) / TILE);
+    var top = Math.floor(p.y / TILE);
+    var bottom = Math.floor((p.y + p.h - 1) / TILE);
+
+    for (var ty = top; ty <= bottom; ty++) {
+      for (var tx = left; tx <= right; tx++) {
+        if (!solidAt(tx, ty)) continue;
+        if (dx > 0) { p.x = tx * TILE - p.w; p.vx = 0; }
+        else if (dx < 0) { p.x = (tx + 1) * TILE; p.vx = 0; }
+        else if (dy > 0) { p.y = ty * TILE - p.h; p.vy = 0; p.onGround = true; }
+        else if (dy < 0) { p.y = (ty + 1) * TILE; p.vy = 0; }
+        return;
+      }
+    }
+
+    // One-way platforms only stop a downward pass that starts above them.
+    if (dy > 0) {
+      for (var wx = left; wx <= right; wx++) {
+        var wy = Math.floor((p.y + p.h - 1) / TILE);
+        if (!oneWayAt(wx, wy)) continue;
+        var surface = wy * TILE;
+        if (p.y + p.h - dy <= surface + 2) {
+          p.y = surface - p.h;
+          p.vy = 0;
+          p.onGround = true;
+          return;
+        }
+      }
+    }
+  }
+
+  function stepPlayer(dt) {
+    if (player.dead) {
+      player.deadFor -= dt;
+      if (player.deadFor <= 0) respawn(false);
+      return;
+    }
+
+    var want = 0;
+    if (input.down("left")) want -= 1;
+    if (input.down("right")) want += 1;
+    if (want !== 0) {
+      player.vx += want * ACCEL * dt;
+      player.vx = P.clamp(player.vx, -MOVE, MOVE);
+      player.face = want;
+    } else {
+      var drop = FRICTION * dt;
+      player.vx = Math.abs(player.vx) <= drop ? 0 : player.vx - Math.sign(player.vx) * drop;
+    }
+
+    if (input.pressed("jump")) player.buffer = BUFFER;
+    if (player.buffer > 0) player.buffer -= dt;
+    if (player.coyote > 0) player.coyote -= dt;
+
+    if (player.buffer > 0 && player.coyote > 0) {
+      player.vy = JUMP_V;
+      player.buffer = 0;
+      player.coyote = 0;
+      player.onGround = false;
+      player.jumpHeld = true;
+      sfx.play(520, 0.08, "square", 0.03);
+    }
+
+    // Variable height: releasing early clips the rise.
+    if (player.jumpHeld && !input.down("jump") && player.vy < 0) {
+      player.vy *= 0.42;
+      player.jumpHeld = false;
+    }
+
+    player.vy = Math.min(player.vy + GRAVITY * dt, 720);
+
+    var wasGround = player.onGround;
+    player.onGround = false;
+    moveAxis(player, player.vx * dt, 0);
+    moveAxis(player, 0, player.vy * dt);
+
+    // Ride whatever mover we are standing on.
+    for (var m = 0; m < movers.length; m++) {
+      var mv = movers[m];
+      if (player.vy >= 0 &&
+          player.x + player.w > mv.x && player.x < mv.x + mv.w &&
+          player.y + player.h >= mv.y && player.y + player.h <= mv.y + mv.h + 8) {
+        player.y = mv.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+        player.x += mv.px;
+        player.y += mv.py;
+      }
+    }
+
+    if (player.onGround) player.coyote = COYOTE;
+    else if (wasGround) player.coyote = COYOTE;
+
+    if (player.y > gh * TILE + 60) return die();
+
+    // Hazards
+    var l = Math.floor((player.x + 3) / TILE);
+    var r = Math.floor((player.x + player.w - 4) / TILE);
+    var t = Math.floor((player.y + 4) / TILE);
+    var b = Math.floor((player.y + player.h - 2) / TILE);
+    for (var hy = t; hy <= b; hy++) {
+      for (var hx = l; hx <= r; hx++) {
+        if (hazardAt(hx, hy)) return die();
+      }
+    }
+
+    // Pickups
+    coins.forEach(function (c) {
+      if (c.got) return;
+      if (Math.abs(player.x + player.w / 2 - (c.x * TILE + 16)) < 20 &&
+          Math.abs(player.y + player.h / 2 - (c.y * TILE + 16)) < 22) {
+        c.got = true;
+        burst(c.x * TILE + 16, c.y * TILE + 16, "#ffd11a", 8);
+        sfx.play(1050, 0.07, "triangle", 0.03);
+        syncHUD();
+      }
+    });
+
+    if (key && !key.got &&
+        Math.abs(player.x + player.w / 2 - (key.x * TILE + 16)) < 22 &&
+        Math.abs(player.y + player.h / 2 - (key.y * TILE + 16)) < 24) {
+      key.got = true;
+      burst(key.x * TILE + 16, key.y * TILE + 16, "#38c8ff", 14);
+      P.toast("🔑", "Key found", "The door is open");
+      sfx.play(880, 0.16, "triangle", 0.04);
+      syncHUD();
+    }
+
+    checkpoints.forEach(function (c) {
+      if (c.hit) return;
+      if (Math.abs(player.x + player.w / 2 - (c.x * TILE + 16)) < 24 &&
+          Math.abs(player.y + player.h / 2 - (c.y * TILE + 16)) < 26) {
+        c.hit = true;
+        burst(c.x * TILE + 16, c.y * TILE + 16, "#2ead4b", 12);
+        P.toast("🚩", "Checkpoint", "Saved");
+        sfx.play(660, 0.12, "sine", 0.03);
+      }
+    });
+
+    if (door && key && key.got &&
+        Math.abs(player.x + player.w / 2 - (door.x * TILE + 16)) < 24 &&
+        Math.abs(player.y + player.h / 2 - (door.y * TILE + 16)) < 28) {
+      completeLevel();
+    }
+  }
+
+  function die() {
+    if (player.dead) return;
+    player.dead = true;
+    player.deadFor = 0.45;
+    deaths++;
+    burst(player.x + 10, player.y + 13, "#d03238", 20);
+    sfx.play(140, 0.3, "sawtooth", 0.05);
+  }
+
+  function burst(x, y, color, n) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      particles.push({
+        x: x, y: y, vx: Math.cos(a) * P.rand(30, 150), vy: Math.sin(a) * P.rand(30, 150) - 40,
+        life: P.rand(0.3, 0.7), max: 0.7, color: color
+      });
+    }
+  }
+
+  function stepEnemies(dt) {
+    enemies.forEach(function (e) {
+      if (e.dead) return;
+      e.x += e.vx * dt;
+
+      // Turn at a wall or at the lip of a ledge.
+      var aheadX = Math.floor((e.vx > 0 ? e.x + e.w + 2 : e.x - 2) / TILE);
+      var footY = Math.floor((e.y + e.h + 2) / TILE);
+      var midY = Math.floor((e.y + e.h / 2) / TILE);
+      if (solidAt(aheadX, midY) || !solidAt(aheadX, footY)) e.vx *= -1;
+
+      if (player.dead) return;
+      if (player.x + player.w < e.x || player.x > e.x + e.w) return;
+      if (player.y + player.h < e.y || player.y > e.y + e.h) return;
+
+      // A descending player stomps; anything else is a death.
+      if (player.vy > 90 && player.y + player.h < e.y + e.h * 0.7) {
+        e.dead = true;
+        player.vy = -430;
+        burst(e.x + 11, e.y + 12, "#2ead4b", 14);
+        sfx.play(320, 0.12, "square", 0.04);
+      } else {
+        die();
+      }
+    });
+  }
+
+  function stepMovers(dt) {
+    movers.forEach(function (m) {
+      var before = { x: m.x, y: m.y };
+      m.t += m.dir * m.speed * dt;
+      if (m.t > m.dist) { m.t = m.dist; m.dir = -1; }
+      if (m.t < 0) { m.t = 0; m.dir = 1; }
+      m.x = m.ox + m.dx * m.t;
+      m.y = m.oy + m.dy * m.t;
+      m.px = m.x - before.x;
+      m.py = m.y - before.y;
+    });
+  }
+
+  function step(dt) {
+    if (!running) return;
+    if (input.pressed("restart")) { respawn(true); timer = 0; return; }
+
+    timer += dt;
+    stepMovers(dt);
+    stepPlayer(dt);
+    stepEnemies(dt);
+
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var q = particles[i];
+      q.x += q.vx * dt;
+      q.y += q.vy * dt;
+      q.vy += 620 * dt;
+      q.life -= dt;
+      if (q.life <= 0) particles.splice(i, 1);
+    }
+
+    var targetX = player.x - W / 2;
+    camera.x = P.clamp(P.lerp(camera.x, targetX, 0.12), 0, Math.max(0, gw * TILE - W));
+    syncHUD();
+  }
+
+  /* ================================================================== *
+   * Completion
+   * ================================================================== */
+
+  function completeLevel() {
+    running = false;
+    loop.stop();
+
+    var got = coins.filter(function (c) { return c.got; }).length;
+    var time = timer;
+    var beatPar = time <= level.par;
+    var score = Math.max(
+      100,
+      Math.round(1200 + got * 120 + Math.max(0, level.par - time) * 25 - deaths * 60)
+    );
+
+    var prevBest = save.best[levelIndex];
+    if (prevBest === undefined || time < prevBest) save.best[levelIndex] = time;
+    save.coins[levelIndex] = Math.max(save.coins[levelIndex] || 0, got);
+    save.cleared[levelIndex] = true;
+    saveProgress();
+
+    if (levelIndex + 1 === 4) P.achieve("level-4", "Halfway Up", "Cleared level 4");
+    if (got === totalCoins && totalCoins > 0) {
+      P.achieve("all-coins", "Completionist", "Took every coin in a level");
+    }
+    if (beatPar) P.achieve("par-time", "Quick Feet", "Beat a level's par time");
+    if (Object.keys(save.cleared).length === LEVELS.length) {
+      P.achieve("all-levels", "Summit", "Cleared all eight levels");
+    }
+
+    var res = P.run(score, { level: levelIndex + 1, time: Math.round(time * 10) / 10, coins: got });
+
+    document.querySelector("#overlay .pp-title").textContent = level.name + " cleared";
+    document.getElementById("msg").textContent = beatPar
+      ? "Under par. Nicely done."
+      : "Par for this level is " + level.par + "s.";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      stat("Time", time.toFixed(1) + "s") +
+      stat("Par", level.par + "s") +
+      stat("Coins", got + "/" + totalCoins) +
+      stat("Deaths", deaths) +
+      stat("Score", P.commas(score)) +
+      stat("Best", P.commas(res.best)) +
+      "</div>";
+
+    sfx.play(720, 0.1, "triangle", 0.05);
+    setTimeout(function () { sfx.play(960, 0.18, "triangle", 0.05); }, 110);
+
+    renderLevelSelect();
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function stat(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  function renderLevelSelect() {
+    var host = document.getElementById("levels");
+    host.innerHTML = "";
+    LEVELS.forEach(function (lv, i) {
+      var b = document.createElement("button");
+      b.className = "lv" + (save.cleared[i] ? " done" : "");
+      b.disabled = !isUnlocked(i);
+      var best = save.best[i];
+      b.innerHTML =
+        '<div class="n">' + (i + 1) + "</div>" +
+        '<div class="nm">' + lv.name + "</div>" +
+        '<div class="t' + (best !== undefined && best <= lv.par ? " par" : "") + '">' +
+        (best === undefined ? "—" : best.toFixed(1) + "s") + "</div>" +
+        '<div class="c">' + (save.coins[i] || 0) + " coins</div>";
+      b.addEventListener("click", function () { loadLevel(i); });
+      host.appendChild(b);
+    });
+  }
+
+  /* ================================================================== *
+   * Rendering
+   * ================================================================== */
+
+  function render() {
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#1f241a");
+    g.addColorStop(1, "#101208");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // Parallax hills
+    ctx.fillStyle = "rgba(124,92,255,.10)";
+    for (var i = 0; i < 9; i++) {
+      var hx = i * 190 - (camera.x * 0.28) % 190;
+      ctx.beginPath();
+      ctx.arc(hx, H - 40, 130, Math.PI, 0);
+      ctx.fill();
+    }
+
+    ctx.save();
+    ctx.translate(-Math.round(camera.x), 0);
+
+    var x0 = Math.max(0, Math.floor(camera.x / TILE) - 1);
+    var x1 = Math.min(gw - 1, Math.ceil((camera.x + W) / TILE));
+
+    for (var y = 0; y < gh; y++) {
+      for (var x = x0; x <= x1; x++) {
+        var ch = grid[y][x];
+        var px = x * TILE, py = y * TILE;
+        if (ch === "#") {
+          ctx.fillStyle = "#2a3122";
+          ctx.fillRect(px, py, TILE, TILE);
+          ctx.fillStyle = solidAt(x, y - 1) ? "#2a3122" : "#ffc091";
+          ctx.fillRect(px, py, TILE, 3);
+          ctx.fillStyle = "rgba(0,0,0,.22)";
+          ctx.fillRect(px, py + TILE - 4, TILE, 4);
+        } else if (ch === "=") {
+          ctx.fillStyle = "#2ead4b";
+          ctx.fillRect(px, py, TILE, 7);
+          ctx.fillStyle = "rgba(124,92,255,.3)";
+          ctx.fillRect(px, py + 7, TILE, 3);
+        } else if (ch === "^") {
+          ctx.fillStyle = "#d03238";
+          for (var s = 0; s < 4; s++) {
+            ctx.beginPath();
+            ctx.moveTo(px + s * 8, py + TILE);
+            ctx.lineTo(px + s * 8 + 4, py + TILE - 13);
+            ctx.lineTo(px + s * 8 + 8, py + TILE);
+            ctx.closePath();
+            ctx.fill();
+          }
+        } else if (ch === "~") {
+          ctx.fillStyle = "#a72027";
+          ctx.fillRect(px, py + 6, TILE, TILE - 6);
+          ctx.fillStyle = "rgba(255,140,140,.5)";
+          ctx.fillRect(px, py + 5 + Math.sin(timer * 3 + x) * 2, TILE, 4);
+        }
+      }
+    }
+
+    movers.forEach(function (m) {
+      ctx.fillStyle = "#38c8ff";
+      P.roundRect(ctx, m.x, m.y, m.w, m.h, 4);
+      ctx.fill();
+      ctx.fillStyle = "rgba(56,189,248,.25)";
+      ctx.fillRect(m.x, m.y + m.h, m.w, 4);
+    });
+
+    checkpoints.forEach(function (c) {
+      ctx.fillStyle = c.hit ? "#2ead4b" : "#4d5941";
+      ctx.fillRect(c.x * TILE + 13, c.y * TILE + 4, 3, 28);
+      ctx.beginPath();
+      ctx.moveTo(c.x * TILE + 16, c.y * TILE + 5);
+      ctx.lineTo(c.x * TILE + 30, c.y * TILE + 11);
+      ctx.lineTo(c.x * TILE + 16, c.y * TILE + 17);
+      ctx.closePath();
+      ctx.fill();
+    });
+
+    coins.forEach(function (c) {
+      if (c.got) return;
+      var bob = Math.sin(timer * 4 + c.x) * 3;
+      ctx.fillStyle = "#ffd11a";
+      ctx.beginPath();
+      ctx.ellipse(c.x * TILE + 16, c.y * TILE + 16 + bob, 6, 8, 0, 0, 7);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,.55)";
+      ctx.fillRect(c.x * TILE + 14, c.y * TILE + 11 + bob, 2, 6);
+    });
+
+    if (key && !key.got) {
+      var kb = Math.sin(timer * 3) * 3;
+      ctx.font = "22px system-ui";
+      ctx.fillText("🔑", key.x * TILE + 5, key.y * TILE + 26 + kb);
+    }
+
+    if (door) {
+      var open = key && key.got;
+      ctx.fillStyle = open ? "#2ead4b" : "#3b3357";
+      P.roundRect(ctx, door.x * TILE + 3, door.y * TILE - 6, 26, 38, 5);
+      ctx.fill();
+      ctx.fillStyle = open ? "rgba(52,211,153,.35)" : "rgba(0,0,0,.45)";
+      ctx.fillRect(door.x * TILE + 8, door.y * TILE, 16, 28);
+      if (open) {
+        ctx.fillStyle = "#e8ebe6";
+        ctx.font = "700 10px system-ui";
+        ctx.fillText("EXIT", door.x * TILE + 4, door.y * TILE - 10);
+      }
+    }
+
+    enemies.forEach(function (e) {
+      if (e.dead) return;
+      ctx.fillStyle = "#2ead4b";
+      P.roundRect(ctx, e.x, e.y, e.w, e.h, 6);
+      ctx.fill();
+      ctx.fillStyle = "#14170f";
+      var eo = e.vx > 0 ? 5 : -5;
+      ctx.fillRect(e.x + 6 + eo * 0.4, e.y + 8, 4, 5);
+      ctx.fillRect(e.x + 13 + eo * 0.4, e.y + 8, 4, 5);
+    });
+
+    particles.forEach(function (q) {
+      ctx.globalAlpha = Math.max(0, q.life / q.max);
+      ctx.fillStyle = q.color;
+      ctx.fillRect(q.x - 2, q.y - 2, 4, 4);
+    });
+    ctx.globalAlpha = 1;
+
+    if (!player.dead) {
+      ctx.fillStyle = "#ffc091";
+      P.roundRect(ctx, player.x, player.y, player.w, player.h, 6);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(player.x + (player.face > 0 ? 11 : 4), player.y + 7, 5, 6);
+      ctx.fillStyle = "rgba(244,114,182,.25)";
+      P.roundRect(ctx, player.x - 3, player.y - 3, player.w + 6, player.h + 6, 8);
+      ctx.fill();
+    }
+
+    ctx.restore();
+
+    // Progress ribbon along the bottom edge
+    ctx.fillStyle = "rgba(11,14,26,.9)";
+    ctx.fillRect(0, H - 22, W, 22);
+    var frac = P.clamp(player.x / (gw * TILE), 0, 1);
+    ctx.fillStyle = "#2a3122";
+    ctx.fillRect(12, H - 13, W - 24, 4);
+    ctx.fillStyle = "#ffc091";
+    ctx.fillRect(12, H - 13, (W - 24) * frac, 4);
+    ctx.fillStyle = "#868685";
+    ctx.font = "700 11px system-ui";
+    ctx.fillText(level.name + "  ·  R to restart", 12, H - 18);
+  }
+
+  /* ================================================================== *
+   * Boot
+   * ================================================================== */
+
+  var loop = P.loop(step, render);
+
+  window.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || !running) return;
+    running = false;
+    loop.stop();
+    document.querySelector("#overlay .pp-title").textContent = "Glow Runner";
+    document.getElementById("msg").textContent = "Pick a level.";
+    document.getElementById("finalStats").innerHTML = "";
+    renderLevelSelect();
+    document.getElementById("overlay").hidden = false;
+  });
+
+  loadLevel(0);
+  loop.stop();
+  running = false;
+  renderLevelSelect();
+  document.getElementById("overlay").hidden = false;
+})();
+</script>
+</body>
+</html>

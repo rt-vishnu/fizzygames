@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en" data-game="merge-2048">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Merge 2048</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #ffd11a; --g2: #b86700; }
+  #wrap { position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; padding: 14px; }
+  #top { display: flex; align-items: center; gap: 8px; width: min(92vmin, 470px); flex-wrap: wrap; }
+  #title { font-size: 20px; font-weight: 900; margin-right: auto;
+    background: linear-gradient(90deg, var(--g1), var(--g2));
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 5px 11px; text-align: center; min-width: 62px; }
+  .stat span { display: block; font-size: 9px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); }
+  .stat b { font-size: 16px; font-variant-numeric: tabular-nums; }
+  #board { position: relative; width: min(92vmin, 470px); aspect-ratio: 1;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 10px; }
+  .cell, .tile { position: absolute; border-radius: 10px; display: grid;
+    place-items: center; font-weight: 900; }
+  .cell { background: var(--surface-2); }
+  .tile { transition: transform .1s ease, left .1s ease, top .1s ease; }
+  #controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  #controls button { padding: 8px 14px; font-size: 13px; }
+  #hint { font-size: 12px; color: var(--muted); }
+  #over { position: absolute; inset: 0; display: grid; place-items: center;
+    background: rgba(232, 235, 230, .93); border-radius: 14px; text-align: center; padding: 16px; }
+  #over[hidden] { display: none; }
+  #over h2 { margin: 0 0 4px; font-size: 28px; font-weight: 900; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="title">Merge 2048</div>
+    <div class="stat"><span>Score</span><b id="score">0</b></div>
+    <div class="stat"><span>Best</span><b id="best">0</b></div>
+    <div class="stat"><span>Top tile</span><b id="top-tile">0</b></div>
+  </div>
+  <div id="board">
+    <div id="over" hidden>
+      <div>
+        <h2 id="overTitle">Out of moves</h2>
+        <p id="overMsg" class="pp-sub"></p>
+        <div id="finalStats"></div>
+        <button class="pp-btn" id="again">Play again</button>
+      </div>
+    </div>
+  </div>
+  <div id="controls">
+    <button class="pp-btn ghost" data-n="3">3×3</button>
+    <button class="pp-btn ghost on" data-n="4">4×4</button>
+    <button class="pp-btn ghost" data-n="5">5×5</button>
+    <button class="pp-btn ghost" id="undo">↶ Undo (3)</button>
+    <button class="pp-btn ghost" id="restart">New</button>
+  </div>
+  <div id="hint">Arrows / WASD to slide · swipe on touch</div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var board = document.getElementById("board");
+
+  var N = 4;
+  var grid, score, dead, won2048, tileEls = {}, nextId = 1;
+  var history, undosLeft, usedUndo, moves, topTile;
+
+  var PALETTE = {
+    2: ["#2a3122", "#e8ebe6"], 4: ["#39422f", "#e8ebe6"],
+    8: ["#054d28", "#fff"], 16: ["#2ead4b", "#fff"],
+    32: ["#2ead4b", "#fff"], 64: ["#2ead4b", "#fff"],
+    128: ["#ffc091", "#fff"], 256: ["#d03238", "#fff"],
+    512: ["#ffd11a", "#14170f"], 1024: ["#38c8ff", "#14170f"],
+    2048: ["#2ead4b", "#14170f"], 4096: ["#e8ebe6", "#14170f"]
+  };
+
+  function bestKey() { return "best-" + N; }
+
+  function geom() {
+    var pad = 10, size = board.clientWidth - pad * 2;
+    var gap = size * 0.025, cell = (size - gap * (N - 1)) / N;
+    return { pad: pad, gap: gap, cell: cell };
+  }
+
+  function drawCells() {
+    [].slice.call(board.querySelectorAll(".cell")).forEach(function (c) { c.remove(); });
+    var g = geom();
+    for (var r = 0; r < N; r++) {
+      for (var c = 0; c < N; c++) {
+        var d = document.createElement("div");
+        d.className = "cell";
+        d.style.width = d.style.height = g.cell + "px";
+        d.style.left = (g.pad + c * (g.cell + g.gap)) + "px";
+        d.style.top = (g.pad + r * (g.cell + g.gap)) + "px";
+        board.appendChild(d);
+      }
+    }
+  }
+
+  function newGrid() {
+    grid = [];
+    for (var r = 0; r < N; r++) {
+      grid.push([]);
+      for (var c = 0; c < N; c++) grid[r].push(null);
+    }
+  }
+
+  function emptyCells() {
+    var out = [];
+    for (var r = 0; r < N; r++) {
+      for (var c = 0; c < N; c++) if (!grid[r][c]) out.push([r, c]);
+    }
+    return out;
+  }
+
+  function spawn() {
+    var free = emptyCells();
+    if (!free.length) return;
+    var pick = free[(Math.random() * free.length) | 0];
+    grid[pick[0]][pick[1]] = { id: nextId++, v: Math.random() < 0.9 ? 2 : 4 };
+  }
+
+  function snapshot() {
+    return {
+      grid: grid.map(function (row) {
+        return row.map(function (t) { return t ? { id: t.id, v: t.v } : null; });
+      }),
+      score: score
+    };
+  }
+
+  function render() {
+    var g = geom(), seen = {};
+    for (var r = 0; r < N; r++) {
+      for (var c = 0; c < N; c++) {
+        var t = grid[r][c];
+        if (!t) continue;
+        seen[t.id] = true;
+        var el = tileEls[t.id];
+        if (!el) {
+          el = document.createElement("div");
+          el.className = "tile";
+          el.style.transform = "scale(0)";
+          board.appendChild(el);
+          tileEls[t.id] = el;
+          (function (e) {
+            requestAnimationFrame(function () { e.style.transform = "scale(1)"; });
+          })(el);
+        }
+        var pal = PALETTE[t.v] || ["#e8ebe6", "#14170f"];
+        el.textContent = t.v;
+        el.style.background = pal[0];
+        el.style.color = pal[1];
+        el.style.width = el.style.height = g.cell + "px";
+        el.style.left = (g.pad + c * (g.cell + g.gap)) + "px";
+        el.style.top = (g.pad + r * (g.cell + g.gap)) + "px";
+        el.style.fontSize = (g.cell * (String(t.v).length > 3 ? 0.26 : 0.36)) + "px";
+      }
+    }
+    for (var id in tileEls) {
+      if (!seen[id]) { tileEls[id].remove(); delete tileEls[id]; }
+    }
+    document.getElementById("score").textContent = P.commas(score);
+    document.getElementById("top-tile").textContent = topTile;
+    document.getElementById("best").textContent = P.commas(P.load(bestKey(), 0));
+    document.getElementById("undo").textContent = "↶ Undo (" + undosLeft + ")";
+    document.getElementById("undo").disabled = undosLeft <= 0 || history.length === 0;
+  }
+
+  function runs(dir) {
+    var out = [], i, j, run;
+    for (i = 0; i < N; i++) {
+      run = [];
+      for (j = 0; j < N; j++) {
+        if (dir === "left") run.push([i, j]);
+        else if (dir === "right") run.push([i, N - 1 - j]);
+        else if (dir === "up") run.push([j, i]);
+        else run.push([N - 1 - j, i]);
+      }
+      out.push(run);
+    }
+    return out;
+  }
+
+  function move(dir) {
+    if (dead) return;
+    var before = snapshot();
+    var moved = false;
+    var lanes = runs(dir);
+
+    for (var i = 0; i < lanes.length; i++) {
+      var cells = lanes[i];
+      var vals = [];
+      for (var k = 0; k < cells.length; k++) {
+        var t = grid[cells[k][0]][cells[k][1]];
+        if (t) vals.push(t);
+      }
+      var merged = [];
+      for (var j = 0; j < vals.length; j++) {
+        if (j + 1 < vals.length && vals[j].v === vals[j + 1].v) {
+          var value = vals[j].v * 2;
+          merged.push({ id: vals[j].id, v: value });
+          score += value;
+          if (value > topTile) topTile = value;
+          if (value === 512) {
+            P.achieve("tile-512", "Big Number", "Made a 512 tile");
+            if (!usedUndo) P.achieve("no-undo", "No Take-Backs", "Reached 512 without an undo");
+          }
+          if (value === 2048 && !won2048) {
+            won2048 = true;
+            P.achieve("tile-2048", "The Whole Point", "Made a 2048 tile");
+          }
+          j++;
+        } else {
+          merged.push(vals[j]);
+        }
+      }
+      for (var m = 0; m < cells.length; m++) {
+        var cur = grid[cells[m][0]][cells[m][1]];
+        var want = merged[m] || null;
+        if ((cur && cur.id) !== (want && want.id) || (cur && want && cur.v !== want.v)) moved = true;
+        grid[cells[m][0]][cells[m][1]] = want;
+      }
+    }
+
+    if (!moved) return;
+
+    moves++;
+    history.push(before);
+    if (history.length > 6) history.shift();
+
+    spawn();
+    render();
+
+    var best = P.load(bestKey(), 0);
+    if (score > best) P.save(bestKey(), score);
+
+    if (won2048 && !dead) {
+      won2048 = false;
+      finish("2048 reached", "Keep going — the board is still live.", false);
+    } else if (!canMove()) {
+      finish("Out of moves", "Nothing left to merge.", true);
+    }
+  }
+
+  function canMove() {
+    if (emptyCells().length) return true;
+    for (var r = 0; r < N; r++) {
+      for (var c = 0; c < N; c++) {
+        var v = grid[r][c].v;
+        if (c + 1 < N && grid[r][c + 1].v === v) return true;
+        if (r + 1 < N && grid[r + 1][c].v === v) return true;
+      }
+    }
+    return false;
+  }
+
+  function undo() {
+    if (undosLeft <= 0 || history.length === 0) return;
+    var prev = history.pop();
+    grid = prev.grid.map(function (row) {
+      return row.map(function (t) { return t ? { id: t.id, v: t.v } : null; });
+    });
+    score = prev.score;
+    undosLeft--;
+    usedUndo = true;
+    document.getElementById("over").hidden = true;
+    dead = false;
+    render();
+  }
+
+  function finish(title, msg, ended) {
+    if (ended) {
+      dead = true;
+      var res = P.run(score, { grid: N + "x" + N, topTile: topTile, moves: moves });
+      document.getElementById("finalStats").innerHTML =
+        '<div class="pp-stats">' +
+        s("Score", P.commas(score)) +
+        s("Top tile", topTile) +
+        s("Moves", moves) +
+        s("Best", P.commas(res.best)) +
+        "</div>";
+    } else {
+      document.getElementById("finalStats").innerHTML = "";
+    }
+    document.getElementById("overTitle").textContent = title;
+    document.getElementById("overMsg").textContent = msg;
+    document.getElementById("again").textContent = ended ? "Play again" : "Continue";
+    document.getElementById("over").hidden = false;
+  }
+
+  function s(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  function restart() {
+    for (var id in tileEls) tileEls[id].remove();
+    tileEls = {};
+    score = 0; dead = false; won2048 = false; topTile = 0;
+    history = []; undosLeft = 3; usedUndo = false; moves = 0;
+    document.getElementById("over").hidden = true;
+    drawCells();
+    newGrid();
+    spawn(); spawn();
+    render();
+  }
+
+  document.addEventListener("keydown", function (e) {
+    var k = e.key.toLowerCase(), dir = null;
+    if (k === "arrowleft" || k === "a") dir = "left";
+    else if (k === "arrowright" || k === "d") dir = "right";
+    else if (k === "arrowup" || k === "w") dir = "up";
+    else if (k === "arrowdown" || k === "s") dir = "down";
+    else if (k === "z") { e.preventDefault(); undo(); return; }
+    if (!dir) return;
+    e.preventDefault();
+    move(dir);
+  });
+
+  var t0 = null;
+  document.addEventListener("touchstart", function (e) {
+    t0 = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }, { passive: true });
+  document.addEventListener("touchend", function (e) {
+    if (!t0) return;
+    var t = e.changedTouches[0], dx = t.clientX - t0.x, dy = t.clientY - t0.y;
+    t0 = null;
+    if (Math.abs(dx) < 24 && Math.abs(dy) < 24) return;
+    move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up"));
+  }, { passive: true });
+
+  document.querySelectorAll("#controls [data-n]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll("#controls [data-n]").forEach(function (x) {
+        x.classList.remove("on");
+      });
+      b.classList.add("on");
+      N = parseInt(b.dataset.n, 10);
+      restart();
+    });
+  });
+  document.getElementById("undo").addEventListener("click", undo);
+  document.getElementById("restart").addEventListener("click", restart);
+  document.getElementById("again").addEventListener("click", function () {
+    if (dead) restart();
+    else document.getElementById("over").hidden = true;
+  });
+  window.addEventListener("resize", render);
+
+  restart();
+})();
+</script>
+</body>
+</html>

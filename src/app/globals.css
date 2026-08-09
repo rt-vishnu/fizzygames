@@ -1,26 +1,110 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/**
+ * Brand palette.
+ *
+ * Every value below is taken from the supplied palette, with two exceptions
+ * that a UI needs but the palette does not define:
+ *   --color-line     a hairline border, derived from Canvas Soft
+ *   --color-field    a dark scrim/playfield, derived from Ink
+ * Both are noted where they appear so they are easy to replace if the palette
+ * gains official values.
+ */
+@theme {
+  /* Brand & accent — Wise Green family */
+  --color-brand: #9fe870;
+  --color-brand-active: #cdffad;
+  --color-brand-neutral: #c5edab;
+  --color-brand-pale: #e2f6d5;
+
+  /* Surface */
+  --color-canvas: #ffffff;
+  --color-canvas-soft: #e8ebe6;
+
+  /* Text */
+  --color-ink: #0e0f0c;
+  --color-ink-deep: #163300;
+  --color-body: #454745;
+  --color-mute: #868685;
+
+  /* Semantic — positive */
+  --color-positive: #2ead4b;
+  --color-positive-deep: #054d28;
+
+  /* Semantic — warning */
+  --color-warning: #ffd11a;
+  --color-warning-deep: #b86700;
+  --color-warning-content: #4a3b1c;
+
+  /* Semantic — negative */
+  --color-negative: #d03238;
+  --color-negative-deep: #a72027;
+  --color-negative-darkest: #a7000d;
+  --color-negative-bg: #320707;
+
+  /* Tertiary accents — illustration only */
+  --color-accent-orange: #ffc091;
+  --color-accent-cyan: #38c8ff;
+
+  /* Derived, not from the palette */
+  --color-line: #d6dbd3;
+  --color-field: #14170f;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-canvas-soft);
+  color: var(--color-ink);
+  /* --font-sans is supplied by the next/font class on <body>. */
+  font-family: var(--font-sans, system-ui), -apple-system, Segoe UI, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin scrollbars that suit the sage chrome. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-rise {
+  animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise {
+    animation: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
 }

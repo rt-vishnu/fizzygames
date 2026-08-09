@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en" data-game="lane-rush">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Lane Rush</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #d03238; --g2: #4a3b1c; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div class="pp-touch" id="touch">
+  <div class="cluster"><button id="tl">◀</button><button id="tr">▶</button></div>
+  <div class="cluster"><button id="tu">▲</button><button id="td">▼</button></div>
+</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Lane Rush</h1>
+    <p class="pp-sub" id="msg">Five lanes, no brakes. Near misses pay double.</p>
+    <p class="pp-sub">
+      <span class="pp-kbd">←</span><span class="pp-kbd">→</span> change lane ·
+      <span class="pp-kbd">↑</span><span class="pp-kbd">↓</span> close or open the gap
+    </p>
+    <div id="finalStats"></div>
+    <p></p>
+    <button class="pp-btn" id="go">Drive</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var W = 480, H = 640;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+
+  var LANES = 5, ROAD_X = 40, ROAD_W = W - 80;
+  var laneW = ROAD_W / LANES;
+
+  var car, traffic, pickups, particles;
+  var score, speed, dist, fuel, shield, combo, comboTimer, bestCombo;
+  var running, dashes, shakeT, night, nightAnnounced;
+
+  var input = P.input();
+  if (P.isTouch) {
+    document.getElementById("touch").classList.add("on");
+    input.bind(document.getElementById("tl"), "left");
+    input.bind(document.getElementById("tr"), "right");
+    input.bind(document.getElementById("tu"), "up");
+    input.bind(document.getElementById("td"), "down");
+  }
+
+  P.hud({ score: "Score", dist: "Metres", combo: "Combo", fuel: "Fuel", shield: "Shield" });
+
+  function laneX(i) { return ROAD_X + i * laneW + laneW / 2; }
+
+  function reset() {
+    car = { lane: 2, x: laneX(2), y: H - 120, w: 34, h: 62 };
+    traffic = []; pickups = []; particles = [];
+    score = 0; speed = 5.4; dist = 0; fuel = 1; shield = 0;
+    combo = 1; comboTimer = 0; bestCombo = 1;
+    dashes = 0; shakeT = 0; night = false; nightAnnounced = false;
+    for (var i = 0; i < 3; i++) spawnRow(-i * 240 - 140);
+    syncHUD();
+  }
+
+  function syncHUD() {
+    P.set({
+      score: P.commas(score),
+      dist: Math.round(dist / 40),
+      combo: "×" + combo,
+      fuel: Math.round(fuel * 100) + "%",
+      shield: shield > 0 ? "✓" : "—"
+    });
+  }
+
+  var CAR_COLORS = ["#38c8ff", "#ffd11a", "#2ead4b", "#2ead4b", "#ffc091", "#38c8ff"];
+
+  function spawnRow(y) {
+    // Always leave at least two lanes open so a row is never a dead end.
+    var blocked = [];
+    var count = 1 + ((Math.random() * 2.4) | 0);
+    while (blocked.length < count) {
+      var l = (Math.random() * LANES) | 0;
+      if (blocked.indexOf(l) === -1) blocked.push(l);
+    }
+    blocked.forEach(function (l) {
+      traffic.push({
+        lane: l, y: y, w: 34, h: 62, scored: false,
+        color: P.pick(CAR_COLORS), drift: 0.5 + Math.random() * 0.5
+      });
+    });
+
+    var free = [];
+    for (var i = 0; i < LANES; i++) if (blocked.indexOf(i) === -1) free.push(i);
+    if (free.length && Math.random() < 0.45) {
+      pickups.push({
+        lane: P.pick(free), y: y - 90,
+        kind: Math.random() < 0.72 ? "fuel" : "shield"
+      });
+    }
+  }
+
+  function crash() {
+    if (shield > 0) {
+      shield = 0;
+      combo = 1;
+      shakeT = 10;
+      burst(car.x, car.y, "#38c8ff", 22);
+      P.toast("🛡️", "Shield used", "That one was free");
+      sfx.play(200, 0.2, "square", 0.04);
+      // Clear the lane so the player isn't instantly hit again.
+      traffic = traffic.filter(function (t) {
+        return !(Math.abs(t.y - car.y) < 90 && t.lane === car.lane);
+      });
+      return;
+    }
+    running = false;
+    loop.stop();
+    burst(car.x, car.y, "#d03238", 40);
+    sfx.play(90, 0.4, "sawtooth", 0.06);
+
+    var metres = Math.round(dist / 40);
+    var res = P.run(score, { metres: metres, combo: bestCombo });
+
+    document.querySelector("#overlay .pp-title").textContent = "Crashed";
+    document.getElementById("msg").textContent = res.isBest
+      ? "New personal best."
+      : "Best so far: " + P.commas(res.best) + ".";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      s("Score", P.commas(score)) +
+      s("Distance", metres + "m") +
+      s("Best combo", "×" + bestCombo) +
+      s("Top speed", Math.round(speed * 22) + "km/h") +
+      s("Best", P.commas(res.best)) +
+      "</div>";
+    document.getElementById("go").textContent = "Drive again";
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function burst(x, y, color, n) {
+    for (var i = 0; i < n; i++) {
+      particles.push({
+        x: x, y: y, vx: (Math.random() - 0.5) * 300, vy: (Math.random() - 0.5) * 300,
+        life: 0.5, max: 0.5, color: color
+      });
+    }
+  }
+
+  function move(dir) {
+    car.lane = P.clamp(car.lane + dir, 0, LANES - 1);
+  }
+
+  function step(dt) {
+    if (!running) return;
+
+    if (input.pressed("left")) move(-1);
+    if (input.pressed("right")) move(1);
+
+    // Up/down trades following distance for speed.
+    var targetY = H - 120;
+    if (input.down("up")) targetY = H - 210;
+    if (input.down("down")) targetY = H - 70;
+    car.y += (targetY - car.y) * 4 * dt;
+
+    speed = Math.min(14, speed + 0.05 * dt * 8);
+    dist += speed * 60 * dt;
+    dashes = (dashes + speed * 60 * dt) % 60;
+    score += speed * 3 * dt * combo;
+
+    fuel -= dt * 0.017;
+    if (fuel <= 0) { fuel = 0; return crash(); }
+
+    if (comboTimer > 0) {
+      comboTimer -= dt;
+      if (comboTimer <= 0 && combo > 1) { combo = 1; syncHUD(); }
+    }
+    if (shakeT > 0) shakeT -= dt * 40;
+
+    if (!night && dist / 40 >= 2000) {
+      night = true;
+      if (!nightAnnounced) {
+        nightAnnounced = true;
+        P.achieve("night", "After Dark", "Reached the night stage");
+        P.toast("🌙", "Night falls", "Headlights only");
+      }
+    }
+
+    car.x += (laneX(car.lane) - car.x) * 14 * dt;
+
+    for (var i = traffic.length - 1; i >= 0; i--) {
+      var t = traffic[i];
+      t.y += (speed * t.drift + speed * 0.55) * 60 * dt;
+      var tx = laneX(t.lane);
+
+      if (Math.abs(tx - car.x) < (t.w + car.w) / 2 - 6 &&
+          t.y + t.h / 2 > car.y - car.h / 2 &&
+          t.y - t.h / 2 < car.y + car.h / 2) {
+        crash();
+        if (!running) return;
+      }
+
+      if (!t.scored && t.y - t.h / 2 > car.y + car.h / 2) {
+        t.scored = true;
+        var near = Math.abs(tx - car.x) < laneW * 1.2;
+        if (near) {
+          combo = Math.min(20, combo + 1);
+          comboTimer = 3.2;
+          if (combo > bestCombo) bestCombo = combo;
+          if (combo >= 10) P.achieve("combo-10", "Paint Scraper", "Reached a ×10 combo");
+          score += 30 * combo;
+          shakeT = 6;
+          sfx.play(900, 0.05, "triangle", 0.02);
+        } else {
+          score += 12;
+        }
+        syncHUD();
+      }
+      if (t.y > H + 120) traffic.splice(i, 1);
+    }
+
+    for (var p = pickups.length - 1; p >= 0; p--) {
+      var pk = pickups[p];
+      pk.y += (speed * 1.05) * 60 * dt;
+      var px = laneX(pk.lane);
+      if (Math.abs(px - car.x) < 30 && Math.abs(pk.y - car.y) < 44) {
+        if (pk.kind === "fuel") {
+          fuel = Math.min(1, fuel + 0.34);
+          score += 120;
+          P.toast("⛽", "Fuel", "+34%");
+        } else {
+          shield = 1;
+          score += 200;
+          P.toast("🛡️", "Shield", "Absorbs one crash");
+        }
+        sfx.play(1050, 0.09, "triangle", 0.03);
+        pickups.splice(p, 1);
+        syncHUD();
+        continue;
+      }
+      if (pk.y > H + 60) pickups.splice(p, 1);
+    }
+
+    var highest = traffic.length
+      ? Math.min.apply(null, traffic.map(function (t) { return t.y; }))
+      : 0;
+    if (highest > -60) spawnRow(highest - (200 + Math.random() * 150));
+
+    for (var q = particles.length - 1; q >= 0; q--) {
+      var pt = particles[q];
+      pt.x += pt.vx * dt; pt.y += pt.vy * dt;
+      pt.life -= dt;
+      if (pt.life <= 0) particles.splice(q, 1);
+    }
+
+    if (Math.round(dist / 40) >= 3000) {
+      P.achieve("dist-3000", "Long Drive", "Covered 3,000 metres");
+    }
+    syncHUD();
+  }
+
+  function carShape(x, y, w, h, color) {
+    ctx.fillStyle = color;
+    P.roundRect(ctx, x - w / 2, y - h / 2, w, h, 8);
+    ctx.fill();
+    ctx.fillStyle = "rgba(5,6,12,.6)";
+    ctx.fillRect(x - w / 2 + 5, y - h / 2 + 9, w - 10, 15);
+    ctx.fillRect(x - w / 2 + 5, y + h / 2 - 22, w - 10, 13);
+  }
+
+  function render() {
+    ctx.save();
+    if (shakeT > 0) {
+      ctx.translate(P.rand(-3, 3), P.rand(-3, 3));
+    }
+
+    ctx.fillStyle = night ? "#101208" : "#191d13";
+    ctx.fillRect(-10, -10, W + 20, H + 20);
+    ctx.fillStyle = night ? "#191d13" : "#1f241a";
+    ctx.fillRect(ROAD_X, 0, ROAD_W, H);
+    ctx.fillStyle = "#39422f";
+    ctx.fillRect(ROAD_X - 8, 0, 8, H);
+    ctx.fillRect(ROAD_X + ROAD_W, 0, 8, H);
+
+    ctx.fillStyle = night ? "rgba(232,234,246,.22)" : "rgba(232,234,246,.35)";
+    for (var l = 1; l < LANES; l++) {
+      for (var y = -60 + dashes; y < H; y += 60) {
+        ctx.fillRect(ROAD_X + l * laneW - 2, y, 4, 32);
+      }
+    }
+
+    pickups.forEach(function (pk) {
+      var px = laneX(pk.lane);
+      ctx.fillStyle = pk.kind === "fuel" ? "#2ead4b" : "#38c8ff";
+      P.roundRect(ctx, px - 13, pk.y - 13, 26, 26, 7);
+      ctx.fill();
+      ctx.fillStyle = "#14170f";
+      ctx.font = "800 14px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText(pk.kind === "fuel" ? "⛽" : "🛡", px, pk.y + 5);
+      ctx.textAlign = "left";
+    });
+
+    traffic.forEach(function (t) {
+      carShape(laneX(t.lane), t.y, t.w, t.h, t.color);
+    });
+
+    particles.forEach(function (q) {
+      ctx.globalAlpha = Math.max(0, q.life / q.max);
+      ctx.fillStyle = q.color;
+      ctx.fillRect(q.x - 2, q.y - 2, 4, 4);
+    });
+    ctx.globalAlpha = 1;
+
+    if (shield > 0) {
+      ctx.strokeStyle = "rgba(56,189,248,.8)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(car.x, car.y, 42, 0, 7);
+      ctx.stroke();
+    }
+    ctx.save();
+    ctx.shadowColor = "#d03238";
+    ctx.shadowBlur = 18;
+    carShape(car.x, car.y, car.w, car.h, "#d03238");
+    ctx.restore();
+
+    // At night the world outside the headlight cone goes dark.
+    if (night) {
+      ctx.save();
+      ctx.globalCompositeOperation = "multiply";
+      var beam = ctx.createRadialGradient(car.x, car.y - 40, 40, car.x, car.y - 40, 300);
+      beam.addColorStop(0, "#ffffff");
+      beam.addColorStop(1, "#22283a");
+      ctx.fillStyle = beam;
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+
+    ctx.restore();
+
+    // Fuel gauge
+    ctx.fillStyle = "rgba(11,14,26,.85)";
+    P.roundRect(ctx, 12, H - 28, 150, 16, 8);
+    ctx.fill();
+    ctx.fillStyle = fuel > 0.25 ? "#2ead4b" : "#d03238";
+    P.roundRect(ctx, 14, H - 26, 146 * fuel, 12, 6);
+    ctx.fill();
+    ctx.fillStyle = "#e8ebe6";
+    ctx.font = "800 10px system-ui";
+    ctx.fillText("FUEL", 20, H - 16);
+
+    if (combo > 1) {
+      ctx.fillStyle = "#ffd11a";
+      ctx.font = "900 22px system-ui";
+      ctx.textAlign = "right";
+      ctx.fillText("×" + combo, W - 16, H - 16);
+      ctx.textAlign = "left";
+    }
+  }
+
+  var loop = P.loop(step, render);
+
+  var t0 = null;
+  document.addEventListener("touchstart", function (e) {
+    t0 = e.touches[0].clientX;
+  }, { passive: true });
+  document.addEventListener("touchend", function (e) {
+    if (t0 === null) return;
+    var dx = e.changedTouches[0].clientX - t0;
+    t0 = null;
+    if (Math.abs(dx) > 22) move(dx > 0 ? 1 : -1);
+    else {
+      var rect = canvas.getBoundingClientRect();
+      move(e.changedTouches[0].clientX < rect.left + rect.width / 2 ? -1 : 1);
+    }
+  }, { passive: true });
+
+  function s(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  document.getElementById("go").addEventListener("click", function () {
+    document.getElementById("overlay").hidden = true;
+    reset();
+    running = true;
+    loop.start();
+  });
+
+  reset();
+  running = false;
+  render();
+})();
+</script>
+</body>
+</html>

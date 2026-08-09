@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en" data-game="jet-hopper">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Jet Hopper</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #38c8ff; --g2: #2ead4b; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); }
+  #bigscore { position: fixed; top: 42px; left: 0; right: 0; text-align: center;
+    font-size: 40px; font-weight: 900; pointer-events: none; text-shadow: 0 3px 12px #000; z-index: 4; }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+<div id="bigscore">0</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Jet Hopper</h1>
+    <p class="pp-sub" id="msg">Hold to climb, release to drop. Thread the gaps.</p>
+    <p class="pp-sub">Click, tap or hold <span class="pp-kbd">space</span> · collect fuel cells</p>
+    <div id="finalStats"></div>
+    <p></p>
+    <button class="pp-btn" id="go">Play</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var W = 640, H = 480, GROUND = 40;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+
+  var SPACING = 230, GAP_MIN = 128;
+
+  var jet, towers, cells, spark;
+  var score, cleared, speed, thrusting, running, tick, perfectStreak, bestStreak;
+
+  var input = P.input();
+
+  function reset() {
+    jet = { x: 140, y: H / 2, vy: 0, r: 13 };
+    towers = []; cells = []; spark = [];
+    score = 0; cleared = 0; speed = 3.1; thrusting = false;
+    tick = 0; perfectStreak = 0; bestStreak = 0;
+    for (var i = 0; i < 4; i++) addTower(W + 120 + i * SPACING);
+    document.getElementById("bigscore").textContent = "0";
+  }
+
+  function addTower(x) {
+    var gap = Math.max(GAP_MIN, 195 - cleared * 2);
+    var top = 50 + Math.random() * (H - GROUND - gap - 100);
+    var t = {
+      x: x, top: top, gap: gap, w: 62, scored: false,
+      // From tower 15 the gaps start sliding vertically.
+      moving: cleared >= 15,
+      phase: Math.random() * Math.PI * 2,
+      range: cleared >= 15 ? Math.min(50, 16 + (cleared - 15) * 2.5) : 0,
+      baseTop: top
+    };
+    towers.push(t);
+    if (Math.random() < 0.55) {
+      cells.push({ x: x + 31, y: top + gap / 2, taken: false });
+    }
+  }
+
+  function die() {
+    running = false;
+    loop.stop();
+    var res = P.run(score, { towers: cleared, streak: bestStreak });
+
+    document.querySelector("#overlay .pp-title").textContent = "Crashed";
+    document.getElementById("msg").textContent = res.isBest
+      ? "New personal best."
+      : "Best so far: " + P.commas(res.best) + ".";
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      s("Score", P.commas(score)) +
+      s("Towers", cleared) +
+      s("Best streak", bestStreak) +
+      s("Best", P.commas(res.best)) +
+      "</div>";
+    document.getElementById("go").textContent = "Fly again";
+    document.getElementById("overlay").hidden = false;
+    sfx.play(120, 0.3, "sawtooth", 0.05);
+  }
+
+  function step(dt) {
+    if (!running) return;
+    tick++;
+
+    thrusting = input.down("fire") || input.down("up") || pointerDown;
+
+    // Thrust up, gravity down — both in px/s².
+    jet.vy += (thrusting ? -1180 : 760) * dt;
+    jet.vy = P.clamp(jet.vy, -430, 470);
+    jet.y += jet.vy * dt;
+
+    if (thrusting && tick % 2 === 0) {
+      spark.push({
+        x: jet.x - 12, y: jet.y + 6,
+        vx: -120 - Math.random() * 120, vy: 60 + Math.random() * 60,
+        life: 0.4, max: 0.4
+      });
+    }
+    for (var s2 = spark.length - 1; s2 >= 0; s2--) {
+      var p = spark[s2];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.life <= 0) spark.splice(s2, 1);
+    }
+
+    if (jet.y - jet.r < 0 || jet.y + jet.r > H - GROUND) return die();
+
+    for (var i = towers.length - 1; i >= 0; i--) {
+      var t = towers[i];
+      t.x -= speed * 60 * dt;
+      if (t.moving) {
+        t.top = t.baseTop + Math.sin(tick * 0.02 + t.phase) * t.range;
+        t.top = P.clamp(t.top, 30, H - GROUND - t.gap - 30);
+      }
+
+      if (jet.x + jet.r > t.x && jet.x - jet.r < t.x + t.w) {
+        if (jet.y - jet.r < t.top || jet.y + jet.r > t.top + t.gap) return die();
+      }
+
+      if (!t.scored && t.x + t.w < jet.x) {
+        t.scored = true;
+        cleared++;
+        score += 10;
+
+        // Threading the middle of the gap pays a bonus.
+        var centre = t.top + t.gap / 2;
+        if (Math.abs(jet.y - centre) < t.gap * 0.17) {
+          perfectStreak++;
+          if (perfectStreak > bestStreak) bestStreak = perfectStreak;
+          score += 25 * perfectStreak;
+          P.toast("🎯", "Perfect gap", "Streak " + perfectStreak);
+          if (perfectStreak >= 5) {
+            P.achieve("perfect-5", "Dead Centre", "Five perfect gaps in a row");
+          }
+          sfx.play(1150, 0.07, "triangle", 0.03);
+        } else {
+          perfectStreak = 0;
+          sfx.play(700, 0.05, "square", 0.02);
+        }
+
+        if (cleared === 15) {
+          P.achieve("towers-15", "Threading", "Cleared 15 towers");
+          P.toast("〽️", "Gates are moving now", "Good luck");
+        }
+        if (cleared === 30) P.achieve("towers-30", "Ice In The Veins", "Cleared 30 towers");
+
+        speed = Math.min(6.6, speed + 0.06);
+        document.getElementById("bigscore").textContent = score;
+      }
+
+      if (t.x + t.w < -20) {
+        towers.splice(i, 1);
+        addTower(towers[towers.length - 1].x + SPACING);
+      }
+    }
+
+    for (var c = cells.length - 1; c >= 0; c--) {
+      var cell = cells[c];
+      cell.x -= speed * 60 * dt;
+      var owner = null;
+      for (var k = 0; k < towers.length; k++) {
+        if (Math.abs(towers[k].x + 31 - cell.x) < 2) owner = towers[k];
+      }
+      if (owner && owner.moving) cell.y = owner.top + owner.gap / 2;
+
+      if (!cell.taken && Math.hypot(cell.x - jet.x, cell.y - jet.y) < jet.r + 12) {
+        cell.taken = true;
+        score += 40;
+        document.getElementById("bigscore").textContent = score;
+        sfx.play(980, 0.08, "triangle", 0.03);
+        cells.splice(c, 1);
+        continue;
+      }
+      if (cell.x < -30) cells.splice(c, 1);
+    }
+  }
+
+  function render() {
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#1f241a");
+    g.addColorStop(1, "#14170f");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = "rgba(255,255,255,.18)";
+    for (var i = 0; i < 40; i++) {
+      var sx = (i * 137 - tick * 0.4) % W;
+      if (sx < 0) sx += W;
+      ctx.fillRect(sx, (i * 79) % (H - GROUND), 2, 2);
+    }
+
+    towers.forEach(function (t) {
+      var tg = ctx.createLinearGradient(t.x, 0, t.x + t.w, 0);
+      tg.addColorStop(0, t.moving ? "#ffd11a" : "#2ead4b");
+      tg.addColorStop(1, t.moving ? "#b45309" : "#054d28");
+      ctx.fillStyle = tg;
+      ctx.fillRect(t.x, 0, t.w, t.top);
+      ctx.fillRect(t.x, t.top + t.gap, t.w, H - GROUND - t.top - t.gap);
+      ctx.fillStyle = t.moving ? "#ffd11a" : "#38c8ff";
+      ctx.fillRect(t.x - 4, t.top - 12, t.w + 8, 12);
+      ctx.fillRect(t.x - 4, t.top + t.gap, t.w + 8, 12);
+    });
+
+    cells.forEach(function (c) {
+      ctx.fillStyle = "#2ead4b";
+      P.roundRect(ctx, c.x - 9, c.y - 9, 18, 18, 5);
+      ctx.fill();
+      ctx.fillStyle = "#14170f";
+      ctx.font = "800 11px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText("⛽", c.x, c.y + 4);
+      ctx.textAlign = "left";
+    });
+
+    ctx.fillStyle = "#1f241a";
+    ctx.fillRect(0, H - GROUND, W, GROUND);
+    ctx.fillStyle = "#39422f";
+    ctx.fillRect(0, H - GROUND, W, 4);
+
+    spark.forEach(function (p) {
+      ctx.globalAlpha = Math.max(0, p.life / p.max);
+      ctx.fillStyle = "#ffd11a";
+      ctx.fillRect(p.x, p.y, 4, 4);
+    });
+    ctx.globalAlpha = 1;
+
+    ctx.save();
+    ctx.translate(jet.x, jet.y);
+    ctx.rotate(P.clamp(jet.vy / 700, -0.5, 0.8));
+    ctx.fillStyle = "#e8ebe6";
+    ctx.beginPath();
+    ctx.moveTo(16, 0); ctx.lineTo(-12, -10); ctx.lineTo(-6, 0); ctx.lineTo(-12, 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#38c8ff";
+    ctx.fillRect(-6, -3, 10, 6);
+    ctx.restore();
+
+    if (perfectStreak > 1) {
+      ctx.fillStyle = "#ffd11a";
+      ctx.font = "800 14px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText("PERFECT ×" + perfectStreak, W / 2, H - 52);
+      ctx.textAlign = "left";
+    }
+  }
+
+  var loop = P.loop(step, render);
+
+  var pointerDown = false;
+  function down(e) { pointerDown = true; if (e && e.cancelable) e.preventDefault(); }
+  function up() { pointerDown = false; }
+  document.addEventListener("mousedown", down);
+  document.addEventListener("mouseup", up);
+  document.addEventListener("touchstart", down, { passive: false });
+  document.addEventListener("touchend", up);
+
+  function s(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  document.getElementById("go").addEventListener("click", function (e) {
+    e.stopPropagation();
+    pointerDown = false;
+    document.getElementById("overlay").hidden = true;
+    reset();
+    running = true;
+    loop.start();
+  });
+
+  reset();
+  running = false;
+  render();
+})();
+</script>
+</body>
+</html>

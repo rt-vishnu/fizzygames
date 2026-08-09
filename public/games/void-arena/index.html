@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="en" data-game="void-arena">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Void Arena</title>
+<link rel="stylesheet" href="../_shared/arcade.css" />
+<style>
+  :root { --g1: #38c8ff; --g2: #054d28; }
+  .pp-stage canvas { box-shadow: 0 12px 40px rgba(14, 15, 12, .10); cursor: crosshair; }
+
+  #levelup { z-index: 25; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+  @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 12px; cursor: pointer; text-align: center; transition: border-color .15s, transform .1s;
+  }
+  .card:hover { border-color: var(--g1); transform: translateY(-2px); }
+  .card .icon { font-size: 28px; }
+  .card .name { font-weight: 800; margin-top: 6px; }
+  .card .desc { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.5; }
+  .card .have { color: var(--g1); font-size: 11px; font-weight: 700; margin-top: 6px; }
+
+  .build { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
+  .build span {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px;
+    padding: 3px 10px; font-size: 11px; font-weight: 700;
+  }
+</style>
+</head>
+<body>
+<div class="pp-stage"><canvas id="c"></canvas></div>
+
+<div class="pp-touch" id="touch">
+  <div class="cluster">
+    <button id="tl">◀</button><button id="tu">▲</button>
+    <button id="td">▼</button><button id="tr">▶</button>
+  </div>
+  <div class="cluster"><button id="tf">🔥</button></div>
+</div>
+
+<div class="pp-overlay" id="levelup" hidden>
+  <div>
+    <h2 class="pp-title" style="font-size:clamp(24px,5vw,36px)">Level <span id="luLevel">2</span></h2>
+    <p class="pp-sub">Choose an upgrade.</p>
+    <div class="cards" id="cards"></div>
+  </div>
+</div>
+
+<div class="pp-overlay" id="overlay">
+  <div>
+    <h1 class="pp-title">Void Arena</h1>
+    <p class="pp-sub" id="msg">
+      Twelve rivals, one shrinking arena. Kill things, level up, pick a build.
+    </p>
+    <p class="pp-sub">
+      <span class="pp-kbd">WASD</span> move · <span class="pp-kbd">mouse</span> aim &amp; fire ·
+      <span class="pp-kbd">Esc</span> pause
+    </p>
+    <div id="finalStats"></div>
+    <div class="build" id="finalBuild"></div>
+    <p></p>
+    <button class="pp-btn" id="go">Enter the arena</button>
+  </div>
+</div>
+
+<script src="../_shared/playpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  var P = window.Playpit;
+  var W = 960, H = 540;
+  var WORLD = 2600, HALF = WORLD / 2;
+
+  var canvas = document.getElementById("c");
+  var ctx = P.fit(canvas, W, H);
+  var sfx = P.audio();
+
+  var NAMES = [
+    "Kestrel", "Nyx", "Bolt", "Ashen", "Rook", "Vex", "Iris", "Talon",
+    "Mercy", "Drift", "Sable", "Quill", "Onyx", "Wren", "Cinder", "Halo",
+    "Pike", "Juno", "Ferrum", "Lux"
+  ];
+  var COLORS = [
+    "#d03238", "#ffd11a", "#2ead4b", "#38c8ff", "#9fe870",
+    "#ffc091", "#ffd11a", "#2ead4b", "#9fe870", "#ffc091"
+  ];
+
+  /* ------------------------------------------------------------------ *
+   * Upgrades
+   * ------------------------------------------------------------------ */
+
+  var UPGRADES = [
+    { id: "dmg",    icon: "⚔️", name: "Heavy Rounds",  desc: "+25% bullet damage",        max: 8, apply: function (s) { s.damage *= 1.25; } },
+    { id: "rate",   icon: "⏱️", name: "Cycling Bolt",  desc: "+18% fire rate",            max: 8, apply: function (s) { s.fireDelay *= 0.82; } },
+    { id: "speed",  icon: "💨", name: "Thrusters",     desc: "+12% movement speed",       max: 6, apply: function (s) { s.speed *= 1.12; } },
+    { id: "hp",     icon: "❤️", name: "Plating",       desc: "+25 max hull, fully repaired", max: 8, apply: function (s) { s.maxHp += 25; s.hp = s.maxHp; } },
+    { id: "regen",  icon: "🩹", name: "Nanoweave",     desc: "+1.5 hull per second",      max: 5, apply: function (s) { s.regen += 1.5; } },
+    { id: "multi",  icon: "🔱", name: "Split Barrel",  desc: "+1 projectile per shot",    max: 4, apply: function (s) { s.shots += 1; } },
+    { id: "pierce", icon: "🎯", name: "Railcore",      desc: "Bullets pass through +1 target", max: 3, apply: function (s) { s.pierce += 1; } },
+    { id: "vel",    icon: "🚀", name: "Coilgun",       desc: "+20% bullet speed and range", max: 5, apply: function (s) { s.bulletSpeed *= 1.2; s.range *= 1.12; } },
+    { id: "steal",  icon: "🧛", name: "Siphon",        desc: "Heal 8% of damage dealt",   max: 4, apply: function (s) { s.lifesteal += 0.08; } },
+    { id: "magnet", icon: "🧲", name: "Collector",     desc: "+70% pickup range",         max: 4, apply: function (s) { s.magnet *= 1.7; } },
+    { id: "crit",   icon: "✨", name: "Weak Points",   desc: "+10% chance of triple damage", max: 5, apply: function (s) { s.crit += 0.1; } },
+    { id: "size",   icon: "⭕", name: "Flak Rounds",   desc: "+30% bullet size",          max: 4, apply: function (s) { s.bulletSize *= 1.3; } }
+  ];
+
+  /* ------------------------------------------------------------------ *
+   * State
+   * ------------------------------------------------------------------ */
+
+  var player, bots, bullets, orbs, pickups, particles, storm, shards;
+  var elapsed, killCount, running, paused, picking, spawnTimer, botSeq;
+  var mouse = { x: W / 2, y: 0, down: false };
+  var input = P.input();
+
+  if (P.isTouch) {
+    document.getElementById("touch").classList.add("on");
+    input.bind(document.getElementById("tl"), "left");
+    input.bind(document.getElementById("tr"), "right");
+    input.bind(document.getElementById("tu"), "up");
+    input.bind(document.getElementById("td"), "down");
+    input.bind(document.getElementById("tf"), "fire");
+  }
+
+  P.hud({ score: "Score", level: "Level", kills: "Kills", alive: "Alive", time: "Time" });
+
+  function baseStats() {
+    return {
+      speed: 205, maxHp: 100, hp: 100, regen: 0,
+      damage: 10, fireDelay: 0.28, bulletSpeed: 560, bulletSize: 5,
+      shots: 1, pierce: 0, lifesteal: 0, magnet: 120, crit: 0, range: 1,
+      shield: 0
+    };
+  }
+
+  function makePlayer() {
+    var s = baseStats();
+    s.x = 0; s.y = 0; s.vx = 0; s.vy = 0; s.r = 15;
+    s.name = "You"; s.color = "#38c8ff"; s.isPlayer = true;
+    s.xp = 0; s.level = 1; s.next = 12; s.score = 0; s.kills = 0;
+    s.cool = 0; s.aim = 0; s.alive = true; s.hitFlash = 0;
+    s.shield = 3.5; // spawn grace so the opening ring can't just delete you
+    s.taken = {};
+    return s;
+  }
+
+  /**
+   * Bots scale with the clock, not with the player, so falling behind is
+   * survivable but coasting is not.
+   */
+  function makeBot(level) {
+    var s = baseStats();
+    var a = Math.random() * Math.PI * 2;
+    var d = P.rand(HALF * 0.45, HALF * 0.92);
+    s.x = Math.cos(a) * d;
+    s.y = Math.sin(a) * d;
+    s.vx = s.vy = 0;
+    s.r = 14;
+    s.name = P.pick(NAMES) + (botSeq++ % 7 === 0 ? " " + (2 + (botSeq % 5)) : "");
+    s.color = P.pick(COLORS);
+    s.isPlayer = false;
+    s.level = level;
+    s.score = level * 60 + ((Math.random() * 120) | 0);
+    s.kills = Math.max(0, level - 1);
+    s.cool = P.rand(0, 0.6);
+    s.aim = a + Math.PI;
+    s.alive = true;
+    s.hitFlash = 0;
+    s.think = 0;
+    s.strafe = Math.random() < 0.5 ? 1 : -1;
+    s.prefer = P.rand(170, 300);
+    s.target = null;
+
+    // Bot power curve: modest per level, but it compounds over a long run.
+    var k = level - 1;
+    s.maxHp = 70 + k * 16;
+    s.hp = s.maxHp;
+    s.damage = 7 + k * 2.1;
+    s.fireDelay = Math.max(0.2, 0.62 - k * 0.03);
+    s.speed = 150 + k * 6;
+    s.bulletSpeed = 400 + k * 12;
+    return s;
+  }
+
+  /**
+   * Neutral debris. Shooting it is the early-game income that stops the run
+   * from depending entirely on winning fights you aren't yet equipped for.
+   */
+  var SHARD_TIERS = [
+    { r: 13, hp: 18, xp: 3,  sides: 3, color: "#ffc091", score: 12 },
+    { r: 19, hp: 42, xp: 7,  sides: 4, color: "#ffd11a", score: 30 },
+    { r: 27, hp: 95, xp: 16, sides: 5, color: "#9fe870", score: 80 }
+  ];
+
+  function makeShard() {
+    var roll = Math.random();
+    var tier = SHARD_TIERS[roll < 0.58 ? 0 : roll < 0.88 ? 1 : 2];
+    var a = Math.random() * Math.PI * 2;
+    var d = P.rand(120, HALF * 0.9);
+    return {
+      x: Math.cos(a) * d, y: Math.sin(a) * d,
+      vx: P.rand(-14, 14), vy: P.rand(-14, 14),
+      rot: Math.random() * 7, spin: P.rand(-0.7, 0.7),
+      hp: tier.hp, maxHp: tier.hp, tier: tier, r: tier.r, flash: 0
+    };
+  }
+
+  function reset() {
+    botSeq = 0;
+    player = makePlayer();
+    bots = [];
+    for (var i = 0; i < 11; i++) bots.push(makeBot(1 + ((Math.random() * 2) | 0)));
+    shards = [];
+    for (var s = 0; s < 34; s++) shards.push(makeShard());
+    bullets = []; orbs = []; pickups = []; particles = [];
+    storm = { r: HALF * 1.05, target: HALF * 1.05 };
+    elapsed = 0; killCount = 0; spawnTimer = 4;
+    paused = false; picking = false;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Combat helpers
+   * ------------------------------------------------------------------ */
+
+  function entities() {
+    return [player].concat(bots);
+  }
+
+  function fire(owner) {
+    if (owner.cool > 0) return;
+    owner.cool = owner.fireDelay;
+    var spread = owner.shots > 1 ? 0.1 * (owner.shots - 1) : 0;
+    for (var i = 0; i < owner.shots; i++) {
+      var t = owner.shots === 1 ? 0 : (i / (owner.shots - 1) - 0.5) * 2;
+      var a = owner.aim + t * spread + (owner.isPlayer ? 0 : P.rand(-0.09, 0.09));
+      var crit = Math.random() < owner.crit;
+      bullets.push({
+        x: owner.x + Math.cos(a) * (owner.r + 4),
+        y: owner.y + Math.sin(a) * (owner.r + 4),
+        vx: Math.cos(a) * owner.bulletSpeed,
+        vy: Math.sin(a) * owner.bulletSpeed,
+        r: owner.bulletSize,
+        dmg: owner.damage * (crit ? 3 : 1),
+        crit: crit,
+        life: 1.15 * owner.range,
+        hits: owner.pierce,
+        owner: owner,
+        color: owner.color
+      });
+    }
+    sfx.play(owner.isPlayer ? 620 : 300, 0.05, "square", owner.isPlayer ? 0.03 : 0.012);
+  }
+
+  function burst(x, y, color, n, power) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var sp = P.rand(30, 140) * (power || 1);
+      particles.push({
+        x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: P.rand(0.25, 0.6), max: 0.6, color: color, r: P.rand(1.5, 3.5)
+      });
+    }
+  }
+
+  function damage(target, amount, from) {
+    if (target.shield > 0) return;
+    target.hp -= amount;
+    target.hitFlash = 0.12;
+    if (from && from.lifesteal) {
+      from.hp = Math.min(from.maxHp, from.hp + amount * from.lifesteal);
+    }
+    if (target.hp > 0) return;
+
+    target.alive = false;
+    burst(target.x, target.y, target.color, 26, 1.6);
+    sfx.play(120, 0.25, "sawtooth", 0.05);
+
+    // Drop the loot the kill earned.
+    var worth = 3 + target.level * 2;
+    for (var i = 0; i < worth; i++) {
+      var a = Math.random() * Math.PI * 2;
+      orbs.push({
+        x: target.x + Math.cos(a) * P.rand(0, 26),
+        y: target.y + Math.sin(a) * P.rand(0, 26),
+        vx: Math.cos(a) * 40, vy: Math.sin(a) * 40,
+        xp: 2, life: 22
+      });
+    }
+    if (Math.random() < 0.35) {
+      pickups.push({ x: target.x, y: target.y, kind: "hp", life: 20 });
+    }
+
+    if (from) {
+      from.kills++;
+      from.score += 100 + target.level * 20;
+      if (from.isPlayer) {
+        killCount++;
+        if (killCount === 25) {
+          P.achieve("kills-25", "Arena Regular", "25 kills in one run");
+        }
+      } else {
+        // Bots that win fights get stronger, which is what makes the
+        // leaderboard worth watching.
+        from.level++;
+        from.maxHp += 16;
+        from.hp = Math.min(from.maxHp, from.hp + 30);
+        from.damage += 2.1;
+        from.fireDelay = Math.max(0.2, from.fireDelay - 0.03);
+      }
+    }
+  }
+
+  function gainXP(amount) {
+    player.xp += amount;
+    player.score += amount * 2;
+    while (player.xp >= player.next) {
+      player.xp -= player.next;
+      player.level++;
+      player.next = Math.round(player.next * 1.35 + 6);
+      player.score += 50;
+      offerUpgrades();
+      if (player.level === 10) {
+        P.achieve("level-10", "Fully Loaded", "Reached level 10");
+      }
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Level-up screen
+   * ------------------------------------------------------------------ */
+
+  var pendingLevels = 0;
+
+  function offerUpgrades() {
+    pendingLevels++;
+    if (picking) return;
+    showUpgradeCards();
+  }
+
+  function showUpgradeCards() {
+    picking = true;
+    loop.stop();
+
+    var pool = UPGRADES.filter(function (u) {
+      return (player.taken[u.id] || 0) < u.max;
+    });
+    var choices = P.shuffle(pool.slice()).slice(0, 3);
+
+    document.getElementById("luLevel").textContent = player.level;
+    var host = document.getElementById("cards");
+    host.innerHTML = "";
+    choices.forEach(function (u) {
+      var have = player.taken[u.id] || 0;
+      var el = document.createElement("button");
+      el.className = "card";
+      el.innerHTML =
+        '<div class="icon">' + u.icon + "</div>" +
+        '<div class="name">' + u.name + "</div>" +
+        '<div class="desc">' + u.desc + "</div>" +
+        (have ? '<div class="have">Owned ×' + have + "</div>" : "");
+      el.addEventListener("click", function () {
+        u.apply(player);
+        player.taken[u.id] = have + 1;
+        sfx.play(880, 0.12, "triangle", 0.04);
+        // Clear the tray immediately: a card left in the DOM is a card that
+        // can be activated twice.
+        host.innerHTML = "";
+        pendingLevels--;
+        if (pendingLevels > 0) showUpgradeCards();
+        else {
+          picking = false;
+          document.getElementById("levelup").hidden = true;
+          loop.start();
+        }
+      });
+      host.appendChild(el);
+    });
+    document.getElementById("levelup").hidden = false;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Simulation
+   * ------------------------------------------------------------------ */
+
+  function nearestEnemy(self) {
+    var best = null, bestD = Infinity;
+    var list = entities();
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (e === self || !e.alive) continue;
+      var d = Math.hypot(e.x - self.x, e.y - self.y);
+      // Bots weight the player as further away than it really is, so the
+      // arena spends most of its time fighting itself rather than dogpiling.
+      if (!self.isPlayer && e.isPlayer) d *= 1.75;
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best;
+  }
+
+  function stepEntityCommon(e, dt) {
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    e.vx *= 0.86;
+    e.vy *= 0.86;
+    e.x = P.clamp(e.x, -HALF, HALF);
+    e.y = P.clamp(e.y, -HALF, HALF);
+    if (e.cool > 0) e.cool -= dt;
+    if (e.shield > 0) e.shield -= dt;
+    if (e.hitFlash > 0) e.hitFlash -= dt;
+    if (e.regen) e.hp = Math.min(e.maxHp, e.hp + e.regen * dt);
+
+    // The storm hurts everyone equally.
+    var d = Math.hypot(e.x, e.y);
+    if (d > storm.r) {
+      e.hp -= 11 * dt;
+      if (e.hp <= 0 && e.alive) damage(e, 0.01, null);
+    }
+  }
+
+  function stepPlayer(dt) {
+    var ax = 0, ay = 0;
+    if (input.down("left")) ax -= 1;
+    if (input.down("right")) ax += 1;
+    if (input.down("up")) ay -= 1;
+    if (input.down("down")) ay += 1;
+    var len = Math.hypot(ax, ay);
+    if (len > 0) {
+      player.vx += (ax / len) * player.speed * dt * 9;
+      player.vy += (ay / len) * player.speed * dt * 9;
+    }
+
+    if (P.isTouch) {
+      var t = nearestEnemy(player);
+      if (t) player.aim = Math.atan2(t.y - player.y, t.x - player.x);
+      if (input.down("fire") || t) fire(player);
+    } else {
+      player.aim = Math.atan2(
+        mouse.y + camera.y - player.y,
+        mouse.x + camera.x - player.x
+      );
+      if (mouse.down || input.down("fire")) fire(player);
+    }
+
+    stepEntityCommon(player, dt);
+
+    // Magnet: pull nearby orbs in, then absorb them.
+    for (var i = orbs.length - 1; i >= 0; i--) {
+      var o = orbs[i];
+      var dx = player.x - o.x, dy = player.y - o.y;
+      var dist = Math.hypot(dx, dy);
+      if (dist < player.magnet) {
+        var pull = (1 - dist / player.magnet) * 620;
+        o.vx += (dx / (dist || 1)) * pull * dt;
+        o.vy += (dy / (dist || 1)) * pull * dt;
+      }
+      if (dist < player.r + 6) {
+        gainXP(o.xp);
+        orbs.splice(i, 1);
+        sfx.play(1100, 0.04, "sine", 0.02);
+      }
+    }
+
+    for (var j = pickups.length - 1; j >= 0; j--) {
+      var p = pickups[j];
+      if (Math.hypot(player.x - p.x, player.y - p.y) < player.r + 14) {
+        player.hp = Math.min(player.maxHp, player.hp + 35);
+        pickups.splice(j, 1);
+        P.toast("❤️", "Repaired", "+35 hull");
+        sfx.play(700, 0.14, "sine", 0.04);
+      }
+    }
+
+    if (player.hp <= 0) endRun();
+  }
+
+  function stepBot(b, dt) {
+    b.think -= dt;
+    if (b.think <= 0) {
+      b.think = P.rand(0.35, 0.9);
+      b.target = nearestEnemy(b);
+      if (Math.random() < 0.3) b.strafe *= -1;
+    }
+    var t = b.target;
+    if (!t || !t.alive) t = b.target = nearestEnemy(b);
+
+    if (t) {
+      var dx = t.x - b.x, dy = t.y - b.y;
+      var dist = Math.hypot(dx, dy) || 1;
+      b.aim = Math.atan2(dy, dx);
+
+      var want = dist > b.prefer ? 1 : dist < b.prefer * 0.62 ? -1 : 0;
+      var mx = (dx / dist) * want;
+      var my = (dy / dist) * want;
+      mx += (-dy / dist) * b.strafe * 0.75;
+      my += (dx / dist) * b.strafe * 0.75;
+
+      // Head back inside the storm rather than trading shots outside it.
+      var fromCentre = Math.hypot(b.x, b.y);
+      if (fromCentre > storm.r * 0.85) {
+        mx -= (b.x / fromCentre) * 2.2;
+        my -= (b.y / fromCentre) * 2.2;
+      }
+
+      var m = Math.hypot(mx, my) || 1;
+      b.vx += (mx / m) * b.speed * dt * 9;
+      b.vy += (my / m) * b.speed * dt * 9;
+
+      if (dist < 420) fire(b);
+      else {
+        // Nothing worth chasing — farm the nearest debris instead.
+        var near = null, nearD = 340;
+        for (var i = 0; i < shards.length; i++) {
+          var d2 = Math.hypot(shards[i].x - b.x, shards[i].y - b.y);
+          if (d2 < nearD) { nearD = d2; near = shards[i]; }
+        }
+        if (near) {
+          b.aim = Math.atan2(near.y - b.y, near.x - b.x);
+          fire(b);
+        }
+      }
+    }
+
+    stepEntityCommon(b, dt);
+  }
+
+  function stepBullets(dt) {
+    var list = entities();
+    for (var i = bullets.length - 1; i >= 0; i--) {
+      var b = bullets[i];
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.life -= dt;
+      if (
+        b.life <= 0 ||
+        b.x < -HALF - 40 || b.x > HALF + 40 ||
+        b.y < -HALF - 40 || b.y > HALF + 40
+      ) {
+        bullets.splice(i, 1);
+        continue;
+      }
+      var consumed = false;
+      for (var j = 0; j < list.length; j++) {
+        var e = list[j];
+        if (!e.alive || e === b.owner) continue;
+        if (Math.hypot(e.x - b.x, e.y - b.y) > e.r + b.r) continue;
+
+        damage(e, b.dmg, b.owner);
+        burst(b.x, b.y, b.crit ? "#ffd11a" : b.color, b.crit ? 8 : 4, 0.7);
+        if (b.hits-- <= 0) { bullets.splice(i, 1); consumed = true; }
+        break;
+      }
+      if (consumed) continue;
+
+      for (var k = shards.length - 1; k >= 0; k--) {
+        var sh = shards[k];
+        if (Math.hypot(sh.x - b.x, sh.y - b.y) > sh.r + b.r) continue;
+
+        sh.hp -= b.dmg;
+        sh.flash = 0.1;
+        burst(b.x, b.y, sh.tier.color, 3, 0.5);
+        if (sh.hp <= 0) {
+          shards.splice(k, 1);
+          burst(sh.x, sh.y, sh.tier.color, 14, 1.1);
+          if (b.owner) b.owner.score += sh.tier.score;
+          // Shard XP is credited straight to the shooter. Dropping it as orbs
+          // stranded it wherever the shard happened to be, which at railgun
+          // range is nowhere the player can reach.
+          if (b.owner === player) gainXP(sh.tier.xp);
+          else if (b.owner) b.owner.hp = Math.min(b.owner.maxHp, b.owner.hp + 4);
+          sfx.play(420, 0.09, "triangle", 0.03);
+        }
+        if (b.hits-- <= 0) bullets.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  function step(dt) {
+    elapsed += dt;
+
+    // Storm closes steadily after a 25-second grace period.
+    var shrinkFor = Math.max(0, elapsed - 25);
+    storm.r = Math.max(320, HALF * 1.05 - shrinkFor * 3.4);
+
+    stepPlayer(dt);
+    if (!running) return;
+
+    for (var i = bots.length - 1; i >= 0; i--) {
+      if (!bots[i].alive) { bots.splice(i, 1); continue; }
+      stepBot(bots[i], dt);
+    }
+
+    stepBullets(dt);
+
+    for (var sh = 0; sh < shards.length; sh++) {
+      var s = shards[sh];
+      s.x = P.clamp(s.x + s.vx * dt, -HALF, HALF);
+      s.y = P.clamp(s.y + s.vy * dt, -HALF, HALF);
+      s.rot += s.spin * dt;
+      if (s.flash > 0) s.flash -= dt;
+    }
+    if (shards.length < 34 && Math.random() < dt * 1.4) shards.push(makeShard());
+
+    for (var o = orbs.length - 1; o >= 0; o--) {
+      var orb = orbs[o];
+      orb.x += orb.vx * dt; orb.y += orb.vy * dt;
+      orb.vx *= 0.9; orb.vy *= 0.9;
+      orb.life -= dt;
+      if (orb.life <= 0) orbs.splice(o, 1);
+    }
+    for (var pk = pickups.length - 1; pk >= 0; pk--) {
+      pickups[pk].life -= dt;
+      if (pickups[pk].life <= 0) pickups.splice(pk, 1);
+    }
+    for (var p = particles.length - 1; p >= 0; p--) {
+      var q = particles[p];
+      q.x += q.vx * dt; q.y += q.vy * dt;
+      q.vx *= 0.92; q.vy *= 0.92;
+      q.life -= dt;
+      if (q.life <= 0) particles.splice(p, 1);
+    }
+
+    // Keep the arena populated; replacements arrive at the current power level.
+    spawnTimer -= dt;
+    if (spawnTimer <= 0 && bots.length < 11) {
+      spawnTimer = P.rand(3, 6);
+      bots.push(makeBot(1 + Math.floor(elapsed / 40)));
+    }
+
+    if (elapsed >= 300 && !player.longHaul) {
+      player.longHaul = true;
+      P.achieve("survive-5", "Long Haul", "Survived five minutes");
+    }
+
+    player.score += dt * 4;
+
+    P.set({
+      score: P.commas(player.score),
+      level: player.level,
+      kills: killCount,
+      alive: bots.length + 1,
+      time: Math.floor(elapsed) + "s"
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Rendering
+   * ------------------------------------------------------------------ */
+
+  var camera = { x: 0, y: 0 };
+
+  function render() {
+    camera.x = P.lerp(camera.x, player.x - W / 2, 0.12);
+    camera.y = P.lerp(camera.y, player.y - H / 2, 0.12);
+
+    ctx.fillStyle = "#14170f";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+
+    // Grid
+    var grid = 80;
+    var x0 = Math.floor((camera.x - HALF) / grid) * grid;
+    ctx.strokeStyle = "rgba(38,45,71,.55)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var gx = Math.max(-HALF, x0); gx <= Math.min(HALF, camera.x + W + grid); gx += grid) {
+      ctx.moveTo(gx, Math.max(-HALF, camera.y - grid));
+      ctx.lineTo(gx, Math.min(HALF, camera.y + H + grid));
+    }
+    for (var gy = Math.max(-HALF, Math.floor((camera.y - HALF) / grid) * grid); gy <= Math.min(HALF, camera.y + H + grid); gy += grid) {
+      ctx.moveTo(Math.max(-HALF, camera.x - grid), gy);
+      ctx.lineTo(Math.min(HALF, camera.x + W + grid), gy);
+    }
+    ctx.stroke();
+
+    // Arena bounds
+    ctx.strokeStyle = "#4d5941";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(-HALF, -HALF, WORLD, WORLD);
+
+    // Storm ring
+    ctx.save();
+    ctx.strokeStyle = "rgba(251,113,133,.85)";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([14, 10]);
+    ctx.lineDashOffset = -elapsed * 26;
+    ctx.beginPath();
+    ctx.arc(0, 0, storm.r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    for (var sd = 0; sd < shards.length; sd++) {
+      var sh = shards[sd];
+      ctx.save();
+      ctx.translate(sh.x, sh.y);
+      ctx.rotate(sh.rot);
+      ctx.beginPath();
+      for (var v = 0; v < sh.tier.sides; v++) {
+        var va = (v / sh.tier.sides) * Math.PI * 2;
+        var vx = Math.cos(va) * sh.r, vy = Math.sin(va) * sh.r;
+        if (v === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+      }
+      ctx.closePath();
+      ctx.fillStyle = sh.flash > 0 ? "#ffffff" : sh.tier.color;
+      ctx.globalAlpha = 0.28;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = sh.flash > 0 ? "#ffffff" : sh.tier.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+
+      if (sh.hp < sh.maxHp) {
+        ctx.fillStyle = "rgba(5,6,12,.7)";
+        ctx.fillRect(sh.x - 16, sh.y - sh.r - 10, 32, 3);
+        ctx.fillStyle = sh.tier.color;
+        ctx.fillRect(sh.x - 16, sh.y - sh.r - 10, 32 * (sh.hp / sh.maxHp), 3);
+      }
+    }
+
+    for (var o = 0; o < orbs.length; o++) {
+      ctx.fillStyle = "#38c8ff";
+      ctx.globalAlpha = Math.min(1, orbs[o].life / 3);
+      ctx.beginPath();
+      ctx.arc(orbs[o].x, orbs[o].y, 3.5, 0, 7);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    for (var pk = 0; pk < pickups.length; pk++) {
+      var p = pickups[pk];
+      ctx.fillStyle = "#2ead4b";
+      P.roundRect(ctx, p.x - 9, p.y - 9, 18, 18, 5);
+      ctx.fill();
+      ctx.fillStyle = "#14170f";
+      ctx.fillRect(p.x - 5, p.y - 1.5, 10, 3);
+      ctx.fillRect(p.x - 1.5, p.y - 5, 3, 10);
+    }
+
+    for (var pa = 0; pa < particles.length; pa++) {
+      var q = particles[pa];
+      ctx.globalAlpha = Math.max(0, q.life / q.max);
+      ctx.fillStyle = q.color;
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, q.r, 0, 7);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    for (var b = 0; b < bullets.length; b++) {
+      var bu = bullets[b];
+      ctx.fillStyle = bu.crit ? "#ffd11a" : bu.color;
+      ctx.beginPath();
+      ctx.arc(bu.x, bu.y, bu.r, 0, 7);
+      ctx.fill();
+    }
+
+    var list = entities();
+    for (var i = 0; i < list.length; i++) drawShip(list[i]);
+
+    ctx.restore();
+
+    drawLeaderboard();
+    drawMinimap();
+    drawXPBar();
+
+    if (Math.hypot(player.x, player.y) > storm.r) {
+      ctx.fillStyle = "rgba(251,113,133,.14)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#d03238";
+      ctx.font = "800 20px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText("GET BACK INSIDE", W / 2, 78);
+      ctx.textAlign = "left";
+    }
+  }
+
+  function drawShip(e) {
+    if (!e.alive) return;
+    ctx.save();
+    ctx.translate(e.x, e.y);
+
+    ctx.save();
+    ctx.rotate(e.aim);
+    ctx.fillStyle = e.hitFlash > 0 ? "#ffffff" : e.color;
+    ctx.beginPath();
+    ctx.moveTo(e.r + 4, 0);
+    ctx.lineTo(-e.r * 0.7, -e.r * 0.8);
+    ctx.lineTo(-e.r * 0.3, 0);
+    ctx.lineTo(-e.r * 0.7, e.r * 0.8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    if (e.isPlayer) {
+      ctx.strokeStyle = "rgba(34,211,238,.5)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, e.r + 7, 0, 7);
+      ctx.stroke();
+    }
+
+    if (e.shield > 0) {
+      ctx.strokeStyle = "rgba(255,204,77," + (0.35 + 0.35 * Math.sin(elapsed * 12)) + ")";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, e.r + 12, 0, 7);
+      ctx.stroke();
+    }
+
+    // Name + hull bar
+    var w = 40;
+    ctx.fillStyle = "rgba(5,6,12,.75)";
+    ctx.fillRect(-w / 2, -e.r - 18, w, 4);
+    ctx.fillStyle = e.hp / e.maxHp > 0.4 ? "#2ead4b" : "#d03238";
+    ctx.fillRect(-w / 2, -e.r - 18, w * Math.max(0, e.hp / e.maxHp), 4);
+
+    ctx.font = "700 11px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillStyle = e.isPlayer ? "#38c8ff" : "rgba(232,234,246,.75)";
+    ctx.fillText(e.name + " · " + e.level, 0, -e.r - 22);
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+
+  function drawLeaderboard() {
+    var list = entities().filter(function (e) { return e.alive; });
+    list.sort(function (a, b) { return b.score - a.score; });
+    var top = list.slice(0, 8);
+
+    var x = W - 172, y = 44;
+    ctx.fillStyle = "rgba(11,14,26,.82)";
+    P.roundRect(ctx, x, y, 160, 24 + top.length * 18, 10);
+    ctx.fill();
+    ctx.strokeStyle = "#39422f";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.font = "800 10px system-ui";
+    ctx.fillStyle = "#868685";
+    ctx.fillText("LEADERBOARD", x + 12, y + 16);
+
+    ctx.font = "700 11px system-ui";
+    for (var i = 0; i < top.length; i++) {
+      var e = top[i];
+      ctx.fillStyle = e.isPlayer ? "#38c8ff" : "#e8ebe6";
+      var label = (i + 1) + ". " + e.name;
+      if (label.length > 15) label = label.slice(0, 15) + "…";
+      ctx.fillText(label, x + 12, y + 32 + i * 18);
+      ctx.textAlign = "right";
+      ctx.fillStyle = e.isPlayer ? "#38c8ff" : "#868685";
+      ctx.fillText(P.commas(e.score), x + 148, y + 32 + i * 18);
+      ctx.textAlign = "left";
+    }
+  }
+
+  function drawMinimap() {
+    var size = 116, pad = 12;
+    var x = W - size - pad, y = H - size - pad;
+    var scale = size / WORLD;
+
+    ctx.fillStyle = "rgba(11,14,26,.85)";
+    P.roundRect(ctx, x, y, size, size, 10);
+    ctx.fill();
+    ctx.strokeStyle = "#39422f";
+    ctx.stroke();
+
+    ctx.save();
+    ctx.beginPath();
+    P.roundRect(ctx, x, y, size, size, 10);
+    ctx.clip();
+
+    ctx.strokeStyle = "rgba(251,113,133,.7)";
+    ctx.beginPath();
+    ctx.arc(x + size / 2, y + size / 2, storm.r * scale, 0, 7);
+    ctx.stroke();
+
+    for (var i = 0; i < bots.length; i++) {
+      ctx.fillStyle = bots[i].color;
+      ctx.fillRect(x + size / 2 + bots[i].x * scale - 1.5, y + size / 2 + bots[i].y * scale - 1.5, 3, 3);
+    }
+    ctx.fillStyle = "#38c8ff";
+    ctx.fillRect(x + size / 2 + player.x * scale - 2.5, y + size / 2 + player.y * scale - 2.5, 5, 5);
+    ctx.restore();
+  }
+
+  function drawXPBar() {
+    var w = 260, x = (W - w) / 2, y = H - 26;
+    ctx.fillStyle = "rgba(11,14,26,.85)";
+    P.roundRect(ctx, x, y, w, 14, 7);
+    ctx.fill();
+    var grad = ctx.createLinearGradient(x, 0, x + w, 0);
+    grad.addColorStop(0, "#38c8ff");
+    grad.addColorStop(1, "#2ead4b");
+    ctx.fillStyle = grad;
+    P.roundRect(ctx, x + 2, y + 2, (w - 4) * P.clamp(player.xp / player.next, 0, 1), 10, 5);
+    ctx.fill();
+
+    ctx.font = "800 10px system-ui";
+    ctx.fillStyle = "#e8ebe6";
+    ctx.textAlign = "center";
+    ctx.fillText("LEVEL " + player.level, W / 2, y + 11);
+    ctx.textAlign = "left";
+
+    // Hull bar sits just above the XP bar.
+    var hw = 200, hx = (W - hw) / 2, hy = y - 18;
+    ctx.fillStyle = "rgba(11,14,26,.85)";
+    P.roundRect(ctx, hx, hy, hw, 12, 6);
+    ctx.fill();
+    ctx.fillStyle = player.hp / player.maxHp > 0.35 ? "#2ead4b" : "#d03238";
+    P.roundRect(ctx, hx + 2, hy + 2, (hw - 4) * P.clamp(player.hp / player.maxHp, 0, 1), 8, 4);
+    ctx.fill();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Run lifecycle
+   * ------------------------------------------------------------------ */
+
+  var loop = P.loop(step, render);
+
+  function endRun() {
+    if (!running) return;
+    running = false;
+    loop.stop();
+
+    var final = entities().filter(function (e) { return e.alive || e === player; });
+    final.sort(function (a, b) { return b.score - a.score; });
+    var rank = final.indexOf(player) + 1;
+    if (rank === 1) P.achieve("rank-1", "Top of the Board", "Finished a run ranked #1");
+
+    var score = Math.round(player.score);
+    var res = P.run(score, {
+      level: player.level,
+      kills: killCount,
+      rank: rank,
+      seconds: Math.round(elapsed)
+    });
+
+    document.getElementById("finalStats").innerHTML =
+      '<div class="pp-stats">' +
+      stat("Score", P.commas(score)) +
+      stat("Level", player.level) +
+      stat("Kills", killCount) +
+      stat("Rank", "#" + rank) +
+      stat("Survived", Math.floor(elapsed) + "s") +
+      stat("Best", P.commas(res.best)) +
+      "</div>";
+
+    var build = document.getElementById("finalBuild");
+    build.innerHTML = "";
+    Object.keys(player.taken).forEach(function (id) {
+      var u = UPGRADES.filter(function (x) { return x.id === id; })[0];
+      if (!u) return;
+      var el = document.createElement("span");
+      el.textContent = u.icon + " " + u.name + " ×" + player.taken[id];
+      build.appendChild(el);
+    });
+
+    document.querySelector("#overlay .pp-title").textContent =
+      rank === 1 ? "Arena cleared" : "You were destroyed";
+    document.getElementById("msg").textContent =
+      res.isBest ? "New personal best." : "Finished #" + rank + " of " + final.length + ".";
+    document.getElementById("go").textContent = "Play again";
+    document.getElementById("overlay").hidden = false;
+  }
+
+  function stat(label, value) {
+    return '<div class="pp-stat"><span>' + label + "</span><b>" + value + "</b></div>";
+  }
+
+  function start() {
+    document.getElementById("overlay").hidden = true;
+    document.getElementById("levelup").hidden = true;
+    reset();
+    running = true;
+    pendingLevels = 0;
+    camera.x = player.x - W / 2;
+    camera.y = player.y - H / 2;
+    loop.start();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Input wiring
+   * ------------------------------------------------------------------ */
+
+  function pointer(e) {
+    var rect = canvas.getBoundingClientRect();
+    mouse.x = (e.clientX - rect.left) * (W / rect.width);
+    mouse.y = (e.clientY - rect.top) * (H / rect.height);
+  }
+  canvas.addEventListener("mousemove", pointer);
+  canvas.addEventListener("mousedown", function (e) { pointer(e); mouse.down = true; });
+  window.addEventListener("mouseup", function () { mouse.down = false; });
+  canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+  window.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || !running || picking) return;
+    paused = !paused;
+    if (paused) loop.stop(); else loop.start();
+  });
+
+  document.getElementById("go").addEventListener("click", start);
+
+  reset();
+  render();
+})();
+</script>
+</body>
+</html>
