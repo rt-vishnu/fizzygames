@@ -36,7 +36,7 @@
 
 <div class="pp-touch" id="touch">
   <div class="cluster"><button id="tl">◀</button><button id="tr">▶</button></div>
-  <div class="cluster"><button id="tn">N</button><button id="tb">B</button></div>
+  <div class="cluster"><button id="tb">▼</button><button id="tg">▲</button><button id="tn">N</button></div>
 </div>
 
 <div class="pp-overlay" id="overlay">
@@ -45,7 +45,7 @@
     <p class="pp-sub" id="msg">
       Three laps, four rivals, one racing line. Podium finishes pay credits.
     </p>
-    <p class="pp-sub">
+    <p class="pp-sub" id="controlsHint">
       <span class="pp-kbd">↑</span> throttle · <span class="pp-kbd">↓</span> brake ·
       <span class="pp-kbd">←</span><span class="pp-kbd">→</span> steer ·
       <span class="pp-kbd">shift</span> nitro
@@ -258,8 +258,11 @@
 
   if (P.isTouch) {
     document.getElementById("touch").classList.add("on");
+    document.getElementById("controlsHint").textContent =
+      "▲ accelerate · ▼ brake · ◀ ▶ steer · N nitro";
     input.bind(document.getElementById("tl"), "left");
     input.bind(document.getElementById("tr"), "right");
+    input.bind(document.getElementById("tg"), "gas");
     input.bind(document.getElementById("tn"), "boost");
     input.bind(document.getElementById("tb"), "brake");
   }
@@ -682,7 +685,7 @@
     ctx.fill();
     ctx.fillStyle = "#e8ebe6";
     ctx.font = "800 10px system-ui";
-    ctx.fillText("NITRO (SHIFT)", bx + 8, by + 12);
+    ctx.fillText(P.isTouch ? "NITRO" : "NITRO (SHIFT)", bx + 8, by + 12);
 
     // Lap splits
     ctx.font = "700 12px system-ui";
