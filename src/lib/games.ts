@@ -473,6 +473,96 @@ export const GAMES: Game[] = [
     art: ["#e2f6d5", "#b86700"],
     thumbnail: "/thumbs/tic-tac-tactics.webp",
   },
+
+  /* ---------------------------------------------------------------- *
+   * Sports arcade
+   * ---------------------------------------------------------------- */
+  {
+    slug: "boundary-bash",
+    title: "Boundary Bash",
+    tagline: "Time the swing. Clear the ropes.",
+    description:
+      "A timing-based cricket batting game. Each delivery comes in faster than the last — swing in the sweet spot for fours and sixes, mistime it and you're walking back. Three wickets to build an innings.",
+    howToPlay: [
+      "Press space or click/tap to swing as the ball reaches you.",
+      "Swing in the glowing window for fours and sixes; early or late swings risk a wicket.",
+      "Dot balls don't cost a wicket, but missing the ball entirely often does.",
+      "You get three wickets. Chase a personal-best innings total.",
+    ],
+    category: "arcade",
+    tags: ["sports", "cricket", "timing", "highscore", "reflex"],
+    embedUrl: "/games/boundary-bash/index.html",
+    aspect: "4:3",
+    plays: 42110,
+    rating: 4.4,
+    releasedAt: "2026-08-09",
+    featured: true,
+    controls: "Space / click / tap",
+    achievements: [
+      { id: "fifty", name: "Half Century", hint: "Score 50 runs in one innings", icon: "🏏" },
+      { id: "sixes-5", name: "Sky High", hint: "Hit five sixes in one innings", icon: "🚀" },
+      { id: "boundary-4", name: "Boundary Machine", hint: "Four boundaries in a row", icon: "🔥" },
+    ],
+    art: ["#2ead4b", "#054d28"],
+    thumbnail: "/thumbs/boundary-bash.webp",
+  },
+  {
+    slug: "court-clash",
+    title: "Court Clash",
+    tagline: "First to five games. Don't blink.",
+    description:
+      "Arcade tennis against a rival who learns your pace. Move the racket, keep the rally alive, and steal games to five. Longer rallies juice your final score — short points won't cut it.",
+    howToPlay: [
+      "Move with arrows/WASD or drag on the court.",
+      "Return the ball with the racket — angle comes from where you make contact.",
+      "Win a game at 4 points with a 2-point lead. First to 5 games takes the set.",
+      "Rally length and games won both feed your run score.",
+    ],
+    category: "arcade",
+    tags: ["sports", "tennis", "versus", "reflex", "highscore"],
+    embedUrl: "/games/court-clash/index.html",
+    aspect: "4:3",
+    plays: 38720,
+    rating: 4.5,
+    releasedAt: "2026-08-09",
+    featured: true,
+    controls: "Arrows / WASD / drag",
+    achievements: [
+      { id: "set-win", name: "Set Winner", hint: "Win a set of Court Clash", icon: "🎾" },
+      { id: "rally-12", name: "Long Game", hint: "Hold a 12-shot rally", icon: "🔁" },
+      { id: "games-3", name: "Set Point Pressure", hint: "Win 3 games in a set", icon: "🏆" },
+    ],
+    art: ["#ffd11a", "#2ead4b"],
+    thumbnail: "/thumbs/court-clash.webp",
+  },
+  {
+    slug: "pitch-rush",
+    title: "Pitch Rush",
+    tagline: "Sixty seconds. Beat the keeper.",
+    description:
+      "A top-down football blitz: dribble into the box, kick on goal, and outfox a roaming keeper before the clock hits zero. Goals pay big; volume of shots keeps the score ticking.",
+    howToPlay: [
+      "Move with arrows or WASD. Space / Kick shoots while you have the ball.",
+      "Aim your kick with the direction you're holding.",
+      "Collect loose balls by running over them when they're slow.",
+      "Score as many as you can in 60 seconds.",
+    ],
+    category: "arcade",
+    tags: ["sports", "football", "soccer", "timed", "highscore"],
+    embedUrl: "/games/pitch-rush/index.html",
+    aspect: "4:3",
+    plays: 35640,
+    rating: 4.3,
+    releasedAt: "2026-08-09",
+    featured: true,
+    controls: "Arrows / WASD + space",
+    achievements: [
+      { id: "goals-3", name: "Match Winner", hint: "Score 3 goals in one match", icon: "⚽" },
+      { id: "goals-5", name: "Hat-trick Plus", hint: "Score 5 goals in one match", icon: "🎩" },
+    ],
+    art: ["#38c8ff", "#2ead4b"],
+    thumbnail: "/thumbs/pitch-rush.webp",
+  },
 ];
 
 export const ASPECT_RATIO: Record<Game["aspect"], string> = {
