@@ -22,7 +22,7 @@
     <h1 class="pp-title">Court Clash</h1>
     <p class="pp-sub" id="msg">First to 5 games wins the set. Keep the rally alive.</p>
     <p class="pp-sub">
-      <span class="pp-kbd">←</span><span class="pp-kbd">→</span> / drag to move
+      <span class="pp-kbd">←</span><span class="pp-kbd">→</span> / drag to move · swing at the ball
     </p>
     <div id="finalStats"></div>
     <p></p>
@@ -36,6 +36,7 @@
   "use strict";
   var P = window.Playpit;
   var W = 480, H = 720;
+  var NET_Y = H / 2, NET_H = 46; // net rises this high in "z" units
 
   var canvas = document.getElementById("c");
   var ctx = P.fit(canvas, W, H);
@@ -52,7 +53,7 @@
 
   var player, rival, ball;
   var youPts, aiPts, youGames, aiGames, rally, bestRally, hits;
-  var running, serving, serveTimer, pointerX;
+  var running, serving, serveTimer, pointerX, particles;
 
   canvas.addEventListener("pointermove", function (e) {
     var r = canvas.getBoundingClientRect();
@@ -66,10 +67,11 @@
   }, { passive: false });
 
   function reset() {
-    player = { x: W / 2, y: H - 56, w: 78, h: 14, speed: 380 };
-    rival = { x: W / 2, y: 56, w: 78, h: 14, speed: 210 };
+    player = { x: W / 2, y: H - 70, speed: 380, swingT: 0 };
+    rival = { x: W / 2, y: 70, speed: 210, swingT: 0 };
     youPts = 0; aiPts = 0; youGames = 0; aiGames = 0;
     rally = 0; bestRally = 0; hits = 0;
+    particles = [];
     running = true;
     serveToPlayer(true);
     syncHUD();
@@ -84,31 +86,53 @@
     });
   }
 
+  /**
+   * The ball carries a ground position (x,y) plus a height "z" that gives
+   * it gravity and a real bounce -- this is the single thing that makes it
+   * read as tennis instead of two paddles batting a puck in a straight
+   * line. Contact only counts near z=0 (racket height), and the ball must
+   * bounce once on each side between hits, same as the real game.
+   */
   function serveToPlayer(playerServe) {
     serving = true;
-    serveTimer = 0.7;
+    serveTimer = 0.55;
     ball = {
-      x: W / 2,
-      y: playerServe ? H - 90 : 90,
-      vx: P.rand(-40, 40),
-      vy: playerServe ? -280 : 280,
-      r: 9,
-      lastHit: null
+      x: W / 2, y: playerServe ? H - 130 : 130,
+      z: 0, vx: 0, vy: 0, vz: 0,
+      vgx: P.rand(-30, 30), vgy: playerServe ? -300 : 300,
+      lastHit: playerServe ? "player" : "ai",
+      bounces: 0, sideAtServe: playerServe ? "far" : "near",
+      trail: []
     };
   }
 
-  function bouncePad(pad, fromBelow) {
-    var nearest = P.clamp(ball.x, pad.x - pad.w / 2, pad.x + pad.w / 2);
-    var offset = (ball.x - pad.x) / (pad.w / 2);
-    ball.vy = (fromBelow ? -1 : 1) * (280 + Math.min(160, rally * 8));
-    ball.vx = offset * 260 + P.rand(-20, 20);
-    ball.y = fromBelow ? pad.y - pad.h / 2 - ball.r - 1 : pad.y + pad.h / 2 + ball.r + 1;
-    ball.lastHit = fromBelow ? "player" : "ai";
+  function launchServe() {
+    ball.vx = ball.vgx;
+    ball.vy = ball.vgy;
+    // A baseline-to-baseline shot covers ~580 units at ~300/s (~1.9s in the
+    // air); this vz peaks near mid-flight, comfortably clearing NET_H (46)
+    // at the net crossing rather than netting out before either player can
+    // touch it.
+    ball.vz = 430;
+    ball.bounces = 0;
+  }
+
+  var GRAVITY = 620;
+
+  function hitBall(pad, isPlayer) {
+    var offset = P.clamp((ball.x - pad.x) / 44, -1, 1);
+    var power = 300 + Math.min(170, rally * 9);
+    ball.vx = offset * 230 + P.rand(-15, 15);
+    ball.vy = (isPlayer ? -1 : 1) * power;
+    ball.vz = 400 + Math.min(90, rally * 4);
+    ball.lastHit = isPlayer ? "player" : "ai";
+    ball.bounces = 0;
+    pad.swingT = 0.18;
     hits++;
     rally++;
     if (rally > bestRally) bestRally = rally;
     if (rally >= 12) P.achieve("rally-12", "Long Game", "Hold a 12-shot rally");
-    sfx.play(fromBelow ? 660 : 520, 0.05, "triangle", 0.04);
+    sfx.play(isPlayer ? 660 : 520, 0.05, "triangle", 0.04);
     syncHUD();
   }
 
@@ -119,21 +143,15 @@
     syncHUD();
 
     if (youPts >= 4 && youPts - aiPts >= 2) {
-      youGames++;
-      youPts = 0; aiPts = 0;
+      youGames++; youPts = 0; aiPts = 0;
       P.toast("🎾", "Game", "You " + youGames + "–" + aiGames);
       if (youGames >= 3) P.achieve("games-3", "Set Point Pressure", "Win 3 games in a set");
     } else if (aiPts >= 4 && aiPts - youPts >= 2) {
-      aiGames++;
-      youPts = 0; aiPts = 0;
+      aiGames++; youPts = 0; aiPts = 0;
       P.toast("🎾", "Game rival", "You " + youGames + "–" + aiGames);
     }
 
-    if (youGames >= 5 || aiGames >= 5) {
-      endSet();
-      return;
-    }
-
+    if (youGames >= 5 || aiGames >= 5) { endSet(); return; }
     serveToPlayer(toPlayer);
   }
 
@@ -146,8 +164,7 @@
     var res = P.run(score, { games: youGames + "-" + aiGames, rally: bestRally });
     document.querySelector("#overlay .pp-title").textContent = won ? "You take the set" : "Set lost";
     document.getElementById("msg").textContent = res.isBest
-      ? "New personal best."
-      : "Best so far: " + P.commas(res.best) + ".";
+      ? "New personal best." : "Best so far: " + P.commas(res.best) + ".";
     document.getElementById("finalStats").innerHTML =
       '<div class="pp-stats">' +
       '<div><span>Score</span><b>' + P.commas(score) + '</b></div>' +
@@ -157,6 +174,15 @@
       "</div>";
     document.getElementById("go").textContent = "Play again";
     document.getElementById("overlay").hidden = false;
+  }
+
+  function burst(x, y, color) {
+    for (var i = 0; i < 10; i++) {
+      particles.push({
+        x: x, y: y, vx: P.rand(-90, 90), vy: P.rand(-90, 90),
+        life: 0.35, max: 0.35, color: color
+      });
+    }
   }
 
   function step(dt) {
@@ -170,46 +196,82 @@
     } else {
       player.x += move * player.speed * dt;
     }
-    player.x = P.clamp(player.x, player.w / 2 + 8, W - player.w / 2 - 8);
+    player.x = P.clamp(player.x, 34, W - 34);
+    if (player.swingT > 0) player.swingT -= dt;
+    if (rival.swingT > 0) rival.swingT -= dt;
 
-    // AI tracks with lag and slight error that shrinks as you lead
-    var aim = ball.x + ball.vx * 0.12;
+    var aim = ball.x + ball.vx * 0.1;
     var skill = 0.55 + Math.min(0.3, aiGames * 0.04);
-    rival.x = P.lerp(rival.x, aim + Math.sin(Date.now() / 280) * (18 - skill * 10), skill * dt * 7);
-    rival.x = P.clamp(rival.x, rival.w / 2 + 8, W - rival.w / 2 - 8);
+    rival.x = P.lerp(rival.x, aim, skill * dt * 6);
+    rival.x = P.clamp(rival.x, 34, W - 34);
     rival.speed = 190 + youGames * 18;
 
     if (serving) {
       serveTimer -= dt;
+      ball.x = P.lerp(ball.x, ball.sideAtServe === "far" ? player.x : rival.x, dt * 4);
       if (serveTimer > 0) return;
       serving = false;
+      launchServe();
     }
 
     ball.x += ball.vx * dt;
     ball.y += ball.vy * dt;
+    ball.vz -= GRAVITY * dt;
+    ball.z += ball.vz * dt;
 
-    // Side walls
-    if (ball.x - ball.r < 18) { ball.x = 18 + ball.r; ball.vx *= -1; }
-    if (ball.x + ball.r > W - 18) { ball.x = W - 18 - ball.r; ball.vx *= -1; }
+    ball.trail.push({ x: ball.x, y: ball.y, z: ball.z });
+    if (ball.trail.length > 6) ball.trail.shift();
 
-    // Paddles
-    if (ball.vy > 0 && ball.lastHit !== "player" &&
-        ball.y + ball.r >= player.y - player.h / 2 &&
-        ball.y - ball.r <= player.y + player.h / 2 &&
-        ball.x >= player.x - player.w / 2 - 4 &&
-        ball.x <= player.x + player.w / 2 + 4) {
-      bouncePad(player, true);
-    }
-    if (ball.vy < 0 && ball.lastHit !== "ai" &&
-        ball.y - ball.r <= rival.y + rival.h / 2 &&
-        ball.y + ball.r >= rival.y - rival.h / 2 &&
-        ball.x >= rival.x - rival.w / 2 - 4 &&
-        ball.x <= rival.x + rival.w / 2 + 4) {
-      bouncePad(rival, false);
+    if (ball.x < 26) { ball.x = 26; ball.vx *= -1; }
+    if (ball.x > W - 26) { ball.x = W - 26; ball.vx *= -1; }
+
+    // Net: only a physical obstacle near the ground and near the middle line.
+    var crossingNet = (ball.y - ball.vy * dt < NET_Y) !== (ball.y < NET_Y);
+    if (crossingNet && ball.z < NET_H) {
+      ball.vy *= -0.35;
+      ball.y += ball.vy * dt * 3;
+      burst(ball.x, NET_Y, "#e2e2e2");
+      sfx.play(150, 0.06, "triangle", 0.03);
     }
 
-    if (ball.y > H + 20) point(false);
-    if (ball.y < -20) point(true);
+    // Ground bounce
+    if (ball.z <= 0 && ball.vz < 0) {
+      ball.z = 0;
+      ball.vz *= -0.62;
+      ball.bounces++;
+      burst(ball.x, ball.y, "rgba(255,255,255,.7)");
+      sfx.play(300, 0.04, "sine", 0.02);
+
+      var onFarSide = ball.y < NET_Y; // rival's side
+      if (ball.bounces >= 2) {
+        point(onFarSide); // it bounced twice on their side -> point to the other player
+        return;
+      }
+    }
+
+    // Contact: only registers close to racket height, once per side per pass.
+    var atPlayerHeight = ball.z < 70 && ball.vy > 0;
+    var atRivalHeight = ball.z < 70 && ball.vy < 0;
+
+    if (atPlayerHeight && ball.lastHit !== "player" &&
+        ball.y > player.y - 30 && ball.y < player.y + 16 &&
+        Math.abs(ball.x - player.x) < 46) {
+      hitBall(player, true);
+    } else if (atRivalHeight && ball.lastHit !== "ai" &&
+        ball.y < rival.y + 30 && ball.y > rival.y - 16 &&
+        Math.abs(ball.x - rival.x) < 46) {
+      hitBall(rival, false);
+    }
+
+    // Missed entirely: ball travels past a player's baseline without contact.
+    if (ball.y > H + 24) point(false);
+    if (ball.y < -24) point(true);
+
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
   }
 
   function drawCourt() {
@@ -222,42 +284,122 @@
     ctx.lineWidth = 3;
     ctx.strokeRect(36, 36, W - 72, H - 72);
     ctx.beginPath();
-    ctx.moveTo(W / 2, 36);
-    ctx.lineTo(W / 2, H - 36);
-    ctx.moveTo(36, H / 2);
-    ctx.lineTo(W - 36, H / 2);
+    ctx.moveTo(W / 2, 36); ctx.lineTo(W / 2, H - 36);
+    ctx.moveTo(36, H / 2); ctx.lineTo(W - 36, H / 2);
+    ctx.moveTo(36, H * 0.28); ctx.lineTo(W - 36, H * 0.28);
+    ctx.moveTo(36, H * 0.72); ctx.lineTo(W - 36, H * 0.72);
     ctx.stroke();
 
-    // Net
-    ctx.fillStyle = "rgba(255,255,255,0.35)";
-    ctx.fillRect(30, H / 2 - 3, W - 60, 6);
+    // Net with posts -- drawn tall so the ball can visibly clip it.
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.fillRect(30, NET_Y - 3, W - 60, 6);
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 2;
+    for (var nx = 34; nx <= W - 34; nx += 12) {
+      ctx.beginPath();
+      ctx.moveTo(nx, NET_Y - NET_H * 0.45);
+      ctx.lineTo(nx, NET_Y + 3);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#0e0f0c";
+    ctx.fillRect(26, NET_Y - NET_H * 0.45 - 2, 4, NET_H * 0.45 + 8);
+    ctx.fillRect(W - 30, NET_Y - NET_H * 0.45 - 2, 4, NET_H * 0.45 + 8);
   }
 
-  function drawPad(p, color) {
-    ctx.fillStyle = color;
-    P.roundRect(ctx, p.x - p.w / 2, p.y - p.h / 2, p.w, p.h, 7);
+  function drawPlayer(p, shirt, facingDown) {
+    var swing = p.swingT > 0;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    // Shadow
+    ctx.fillStyle = "rgba(0,0,0,.2)";
+    ctx.beginPath();
+    ctx.ellipse(0, 22, 16, 5, 0, 0, Math.PI * 2);
     ctx.fill();
+    // Legs
+    ctx.strokeStyle = "#0e0f0c";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(-6, 10); ctx.lineTo(-10, 24);
+    ctx.moveTo(6, 10); ctx.lineTo(10, 24);
+    ctx.stroke();
+    // Body
+    ctx.fillStyle = shirt;
+    P.roundRect(ctx, -13, -8, 26, 22, 8);
+    ctx.fill();
+    // Head
+    ctx.fillStyle = "#ffc091";
+    ctx.beginPath();
+    ctx.arc(0, -16, 9, 0, Math.PI * 2);
+    ctx.fill();
+    // Racket -- swings out to the side on contact
+    ctx.save();
+    var reach = swing ? 1 : 0.4;
+    ctx.rotate((facingDown ? 1 : -1) * (swing ? -0.9 : -0.3));
+    ctx.strokeStyle = "#4a3b1c";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(14, 0);
+    ctx.lineTo(14 + 16 * reach, (facingDown ? 1 : -1) * 4);
+    ctx.stroke();
+    ctx.strokeStyle = "#e8ebe6";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(14 + 20 * reach, (facingDown ? 1 : -1) * 4, 8, 10, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    ctx.restore();
   }
 
   function render() {
     drawCourt();
-    drawPad(rival, "#ffc091");
-    drawPad(player, "#ffd11a");
+    drawPlayer(rival, "#ffc091", true);
+    drawPlayer(player, "#ffd11a", false);
+
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      ctx.globalAlpha = Math.max(0, p.life / p.max);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
 
     if (ball) {
-      ctx.fillStyle = "#ffffff";
+      // Trail
+      for (var t = 0; t < ball.trail.length; t++) {
+        var tp = ball.trail[t];
+        ctx.globalAlpha = (t / ball.trail.length) * 0.35;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(tp.x, tp.y - tp.z * 0.55, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      // Ground shadow shrinks/moves independent of the ball -- this is the
+      // cue that reads as height rather than the ball just being "up".
+      var shadowScale = P.clamp(1 - ball.z / 260, 0.25, 1);
+      ctx.fillStyle = "rgba(0,0,0,.28)";
       ctx.beginPath();
-      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+      ctx.ellipse(ball.x, ball.y, 7 * shadowScale, 3 * shadowScale, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = "#e2e2e2";
+
+      ctx.fillStyle = "#f4f455";
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y - ball.z * 0.55, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#dcd400";
+      ctx.lineWidth = 1;
       ctx.stroke();
     }
 
     if (serving) {
-      ctx.fillStyle = "rgba(14,15,12,0.45)";
+      ctx.fillStyle = "rgba(14,15,12,0.5)";
       ctx.font = "800 18px system-ui,sans-serif";
       ctx.textAlign = "center";
       ctx.fillText("Ready…", W / 2, H / 2 - 16);
+      ctx.textAlign = "left";
     }
   }
 

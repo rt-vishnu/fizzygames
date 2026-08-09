@@ -262,10 +262,34 @@
     var dpr = Math.min(global.devicePixelRatio || 1, 2);
     canvas.width = w * dpr;
     canvas.height = h * dpr;
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
     var ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    /**
+     * Pick a CSS size that preserves the aspect ratio inside whatever box the
+     * host gives us. A plain `width/height` in px plus `max-width: 100%` only
+     * shrinks one axis, which on a phone-sized iframe stretched every game
+     * vertically. Never scale above 1:1, so desktop keeps the exact pixel
+     * size games have always been laid out against.
+     */
+    function layout() {
+      var host = canvas.parentElement;
+      var aw = host ? host.clientWidth : global.innerWidth;
+      var ah = host ? host.clientHeight : global.innerHeight;
+      if (!aw || !ah) return;
+      var s = Math.min(aw / w, ah / h, 1);
+      canvas.style.width = Math.round(w * s) + "px";
+      canvas.style.height = Math.round(h * s) + "px";
+    }
+
+    layout();
+    // The iframe can be resized without the inner window firing `resize`
+    // (host layout changes, fullscreen), so watch the host box directly.
+    if (global.ResizeObserver && canvas.parentElement) {
+      new global.ResizeObserver(layout).observe(canvas.parentElement);
+    }
+    global.addEventListener("resize", layout);
+    global.addEventListener("orientationchange", layout);
     return ctx;
   }
 

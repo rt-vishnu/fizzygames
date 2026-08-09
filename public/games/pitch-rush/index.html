@@ -21,10 +21,10 @@
 <div class="pp-overlay" id="overlay">
   <div>
     <h1 class="pp-title">Pitch Rush</h1>
-    <p class="pp-sub" id="msg">60 seconds on the pitch. Dribble, shoot, beat the keeper.</p>
+    <p class="pp-sub" id="msg">60 seconds on the pitch. Dribble past defenders, shoot, beat the keeper.</p>
     <p class="pp-sub">
       <span class="pp-kbd">WASD</span>/<span class="pp-kbd">arrows</span> move ·
-      <span class="pp-kbd">space</span> kick
+      <span class="pp-kbd">space</span> kick · pass to your teammate near goal
     </p>
     <div id="finalStats"></div>
     <p></p>
@@ -37,7 +37,7 @@
 (function () {
   "use strict";
   var P = window.Playpit;
-  var W = 640, H = 480;
+  var W = 720, H = 480;
 
   var canvas = document.getElementById("c");
   var ctx = P.fit(canvas, W, H);
@@ -55,16 +55,28 @@
 
   P.hud({ goals: "Goals", time: "Time", shots: "Shots", possession: "Ball" });
 
-  var player, keeper, ball, particles;
-  var goals, shots, timeLeft, running, freezeT, possession;
-  var FIELD = { x: 40, y: 30, w: W - 80, h: H - 60 };
+  var FIELD = { x: 30, y: 30, w: W - 60, h: H - 60 };
+  var GOAL_TOP = H / 2 - 56, GOAL_BOT = H / 2 + 56, GOAL_X = FIELD.x + FIELD.w - 6;
+
+  var player, teammate, keeper, defenders, ball, particles;
+  var goals, shots, timeLeft, running, freezeT, possession, tackleFlash;
 
   function reset() {
-    player = { x: W * 0.35, y: H * 0.55, r: 14, speed: 210 };
-    keeper = { x: W - 78, y: H / 2, r: 15, speed: 160, dir: 1 };
-    ball = { x: player.x + 18, y: player.y, r: 8, vx: 0, vy: 0, free: false };
+    player = { x: W * 0.22, y: H * 0.55, r: 13, speed: 220, kickCd: 0 };
+    teammate = { x: W * 0.42, y: H * 0.28, r: 12, speed: 90, roamT: 0 };
+    keeper = { x: GOAL_X - 12, y: H / 2, r: 15 };
+
+    // Two defenders hold a rough back line and shift toward the ball --
+    // there is now something on the pitch to actually get past, which is
+    // the whole thing that was missing before.
+    defenders = [
+      { x: W * 0.5, y: H * 0.36, r: 13, speed: 128, home: { x: W * 0.5, y: H * 0.36 } },
+      { x: W * 0.58, y: H * 0.68, r: 13, speed: 128, home: { x: W * 0.58, y: H * 0.68 } }
+    ];
+
+    ball = { x: player.x + 18, y: player.y, r: 8, vx: 0, vy: 0, free: false, owner: "player" };
     particles = [];
-    goals = 0; shots = 0; timeLeft = 60; freezeT = 0; possession = true;
+    goals = 0; shots = 0; timeLeft = 60; freezeT = 0; possession = true; tackleFlash = 0;
     running = true;
     syncHUD();
   }
@@ -74,49 +86,70 @@
       goals: String(goals),
       time: Math.ceil(timeLeft) + "s",
       shots: String(shots),
-      possession: possession ? "You" : "Loose"
+      possession: possession ? "You" : (ball.owner === "teammate" ? "Teammate" : "Loose")
     });
   }
 
-  function kick() {
-    if (!running || freezeT > 0) return;
-    if (!possession) return;
+  function aimVector() {
     var dx = 1, dy = 0;
     if (input.down("up")) dy -= 1;
     if (input.down("down")) dy += 1;
     if (input.down("left")) dx -= 0.35;
     if (input.down("right")) dx += 1;
-    var len = Math.sqrt(dx * dx + dy * dy) || 1;
-    dx /= len; dy /= len;
+    var len = Math.hypot(dx, dy) || 1;
+    return { x: dx / len, y: dy / len };
+  }
+
+  function kick() {
+    if (!running || freezeT > 0 || player.kickCd > 0) return;
+    if (!possession) return;
+    player.kickCd = 0.25;
+
+    var v = aimVector();
+    // Passing: aiming roughly at the teammate while close enough counts as
+    // a pass instead of a shot, so there is a reason to use the teammate.
+    var toMate = Math.hypot(teammate.x - player.x, teammate.y - player.y);
+    var aimedAtMate = (v.x * (teammate.x - player.x) + v.y * (teammate.y - player.y)) / (toMate || 1) > 0.75;
+
     ball.free = true;
     possession = false;
-    ball.vx = dx * P.rand(320, 420);
-    ball.vy = dy * P.rand(220, 340);
-    shots++;
-    sfx.play(300, 0.07, "square", 0.045);
+    if (aimedAtMate && toMate < 260) {
+      var pdx = teammate.x - ball.x, pdy = teammate.y - ball.y;
+      var plen = Math.hypot(pdx, pdy) || 1;
+      ball.vx = (pdx / plen) * 300;
+      ball.vy = (pdy / plen) * 300;
+      ball.owner = "teammate";
+      sfx.play(420, 0.05, "triangle", 0.03);
+    } else {
+      ball.vx = v.x * P.rand(360, 460);
+      ball.vy = v.y * P.rand(260, 360);
+      ball.owner = null;
+      shots++;
+      sfx.play(300, 0.07, "square", 0.045);
+    }
     syncHUD();
   }
 
-  function scoreGoal() {
+  function scoreGoal(byTeammate) {
     goals++;
     freezeT = 0.9;
     sfx.play(700, 0.1, "triangle", 0.05);
     sfx.play(980, 0.12, "square", 0.04);
-    P.toast("⚽", "Goal!", goals + " so far");
+    P.toast("⚽", byTeammate ? "Assist finished!" : "Goal!", goals + " so far");
     if (goals >= 3) P.achieve("goals-3", "Match Winner", "Score 3 goals in one match");
     if (goals >= 5) P.achieve("goals-5", "Hat-trick Plus", "Score 5 goals in one match");
     for (var i = 0; i < 18; i++) {
       particles.push({
-        x: FIELD.x + FIELD.w - 20, y: H / 2,
-        vx: P.rand(-220, -40), vy: P.rand(-180, 180),
+        x: GOAL_X, y: H / 2, vx: P.rand(-220, -40), vy: P.rand(-180, 180),
         life: P.rand(0.4, 0.9), max: 0.9
       });
     }
-    // Reset positions
-    player.x = W * 0.35; player.y = H * 0.55;
+    player.x = W * 0.22; player.y = H * 0.55;
+    teammate.x = W * 0.42; teammate.y = H * 0.28;
     ball.x = player.x + 18; ball.y = player.y;
-    ball.vx = 0; ball.vy = 0; ball.free = false; possession = true;
+    ball.vx = 0; ball.vy = 0; ball.free = false; ball.owner = "player"; possession = true;
     keeper.y = H / 2;
+    defenders.forEach(function (d) { d.x = d.home.x; d.y = d.home.y; });
     syncHUD();
   }
 
@@ -127,8 +160,7 @@
     var res = P.run(score, { goals: goals, shots: shots });
     document.querySelector("#overlay .pp-title").textContent = "Full time";
     document.getElementById("msg").textContent = res.isBest
-      ? "New personal best match."
-      : "Best so far: " + P.commas(res.best) + ".";
+      ? "New personal best match." : "Best so far: " + P.commas(res.best) + ".";
     document.getElementById("finalStats").innerHTML =
       '<div class="pp-stats">' +
       '<div><span>Score</span><b>' + P.commas(score) + '</b></div>' +
@@ -143,17 +175,12 @@
   function step(dt) {
     if (!running) return;
 
-    if (freezeT > 0) {
-      freezeT -= dt;
-      return;
-    }
+    if (freezeT > 0) { freezeT -= dt; return; }
+    if (player.kickCd > 0) player.kickCd -= dt;
+    if (tackleFlash > 0) tackleFlash -= dt;
 
     timeLeft -= dt;
-    if (timeLeft <= 0) {
-      timeLeft = 0;
-      endMatch();
-      return;
-    }
+    if (timeLeft <= 0) { timeLeft = 0; endMatch(); return; }
 
     if (input.pressed("fire")) kick();
 
@@ -163,65 +190,91 @@
     if (input.down("up")) my -= 1;
     if (input.down("down")) my += 1;
     if (mx || my) {
-      var mlen = Math.sqrt(mx * mx + my * my);
+      var mlen = Math.hypot(mx, my);
       player.x += (mx / mlen) * player.speed * dt;
       player.y += (my / mlen) * player.speed * dt;
     }
     player.x = P.clamp(player.x, FIELD.x + player.r, FIELD.x + FIELD.w - player.r - 70);
     player.y = P.clamp(player.y, FIELD.y + player.r, FIELD.y + FIELD.h - player.r);
 
-    // Keeper patrol + react to ball
-    var targetY = ball.y;
-    if (!ball.free) targetY = H / 2 + Math.sin(Date.now() / 400) * 40;
-    keeper.y = P.lerp(keeper.y, targetY, dt * 3.2);
+    // Teammate: holds a forward-left position and drifts to support,
+    // rather than standing dead still -- reads as an actual second player.
+    teammate.roamT += dt;
+    var mateTargetX = W * 0.55 + Math.sin(teammate.roamT * 0.6) * 40;
+    var mateTargetY = H * 0.3 + Math.cos(teammate.roamT * 0.5) * 60;
+    teammate.x = P.lerp(teammate.x, mateTargetX, dt * 1.2);
+    teammate.y = P.lerp(teammate.y, mateTargetY, dt * 1.2);
+    teammate.x = P.clamp(teammate.x, FIELD.x + teammate.r, FIELD.x + FIELD.w - teammate.r);
+    teammate.y = P.clamp(teammate.y, FIELD.y + teammate.r, FIELD.y + FIELD.h - teammate.r);
+
+    // Defenders: shift off their home spot toward whoever currently has
+    // (or is nearest to) the ball, and can dispossess on contact.
+    defenders.forEach(function (d) {
+      var chase = ball.free ? { x: ball.x, y: ball.y } : { x: player.x, y: player.y };
+      var tx = P.lerp(d.home.x, chase.x, 0.55);
+      var ty = P.lerp(d.home.y, chase.y, 0.55);
+      d.x = P.lerp(d.x, tx, dt * 1.8);
+      d.y = P.lerp(d.y, ty, dt * 1.8);
+
+      if (possession) {
+        var ddx = player.x - d.x, ddy = player.y - d.y;
+        if (ddx * ddx + ddy * ddy < (d.r + player.r + 2) * (d.r + player.r + 2)) {
+          possession = false;
+          ball.free = true;
+          ball.owner = null;
+          var away = Math.atan2(player.y - d.y, player.x - d.x) + P.rand(-0.3, 0.3);
+          ball.vx = Math.cos(away) * 220;
+          ball.vy = Math.sin(away) * 220;
+          tackleFlash = 0.4;
+          sfx.play(160, 0.1, "sawtooth", 0.03);
+          syncHUD();
+        }
+      }
+    });
+
+    var targetKY = ball.y;
+    if (!ball.free) targetKY = H / 2 + Math.sin(Date.now() / 400) * 40;
+    keeper.y = P.lerp(keeper.y, targetKY, dt * 3.2);
     keeper.y = P.clamp(keeper.y, FIELD.y + 50, FIELD.y + FIELD.h - 50);
 
     if (possession && !ball.free) {
-      ball.x = player.x + 16;
-      ball.y = player.y;
+      ball.x = player.x + 16; ball.y = player.y;
     } else {
-      ball.x += ball.vx * dt;
-      ball.y += ball.vy * dt;
+      ball.x += ball.vx * dt; ball.y += ball.vy * dt;
       ball.vx *= Math.pow(0.985, dt * 60);
       ball.vy *= Math.pow(0.985, dt * 60);
 
-      // Walls
       if (ball.x - ball.r < FIELD.x) { ball.x = FIELD.x + ball.r; ball.vx *= -0.6; }
       if (ball.y - ball.r < FIELD.y) { ball.y = FIELD.y + ball.r; ball.vy *= -0.7; }
       if (ball.y + ball.r > FIELD.y + FIELD.h) { ball.y = FIELD.y + FIELD.h - ball.r; ball.vy *= -0.7; }
 
-      // Goal mouth (right)
-      var goalTop = H / 2 - 52, goalBot = H / 2 + 52;
-      if (ball.x + ball.r >= FIELD.x + FIELD.w - 8) {
-        if (ball.y > goalTop && ball.y < goalBot) {
-          scoreGoal();
+      if (ball.x + ball.r >= GOAL_X) {
+        if (ball.y > GOAL_TOP && ball.y < GOAL_BOT) {
+          scoreGoal(ball.owner === "teammate");
         } else {
-          ball.x = FIELD.x + FIELD.w - 8 - ball.r;
-          ball.vx *= -0.55;
+          ball.x = GOAL_X - ball.r; ball.vx *= -0.55;
         }
       }
 
-      // Keeper save
       var kdx = ball.x - keeper.x, kdy = ball.y - keeper.y;
       if (kdx * kdx + kdy * kdy < (keeper.r + ball.r) * (keeper.r + ball.r)) {
         ball.vx = -Math.abs(ball.vx) * 0.7 - 40;
         ball.vy += (ball.y - keeper.y) * 8;
+        ball.owner = null;
         sfx.play(180, 0.08, "triangle", 0.04);
       }
 
-      // Pickup
+      // Player picks up any slow, loose ball -- including one just passed
+      // to the teammate's feet, since the teammate doesn't dribble itself.
       var pdx = ball.x - player.x, pdy = ball.y - player.y;
       if (pdx * pdx + pdy * pdy < (player.r + ball.r + 4) * (player.r + ball.r + 4) &&
-          Math.hypot(ball.vx, ball.vy) < 90) {
-        possession = true;
-        ball.free = false;
+          Math.hypot(ball.vx, ball.vy) < 110) {
+        possession = true; ball.free = false; ball.owner = "player";
         ball.vx = 0; ball.vy = 0;
         syncHUD();
       }
 
-      if (Math.hypot(ball.vx, ball.vy) < 12 && ball.free) {
-        ball.vx = 0; ball.vy = 0;
-      }
+      if (Math.hypot(ball.vx, ball.vy) < 12 && ball.free) { ball.vx = 0; ball.vy = 0; }
     }
 
     for (var i = particles.length - 1; i >= 0; i--) {
@@ -231,13 +284,11 @@
     }
 
     if (Math.floor(timeLeft) !== Math.floor(timeLeft + dt)) syncHUD();
-    else if ((Math.random() < 0.05)) syncHUD();
   }
 
   function drawField() {
     ctx.fillStyle = "#1f7a34";
     ctx.fillRect(0, 0, W, H);
-    // Stripes
     for (var i = 0; i < 8; i++) {
       ctx.fillStyle = i % 2 ? "#1f7a34" : "#246f36";
       ctx.fillRect(FIELD.x + (FIELD.w / 8) * i, FIELD.y, FIELD.w / 8, FIELD.h);
@@ -245,25 +296,26 @@
     ctx.strokeStyle = "rgba(255,255,255,0.85)";
     ctx.lineWidth = 3;
     ctx.strokeRect(FIELD.x, FIELD.y, FIELD.w, FIELD.h);
-    // Halfway
     ctx.beginPath();
-    ctx.moveTo(W / 2, FIELD.y);
-    ctx.lineTo(W / 2, FIELD.y + FIELD.h);
+    ctx.moveTo(W / 2, FIELD.y); ctx.lineTo(W / 2, FIELD.y + FIELD.h);
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(W / 2, H / 2, 48, 0, Math.PI * 2);
     ctx.stroke();
-    // Penalty box
     ctx.strokeRect(FIELD.x + FIELD.w - 110, H / 2 - 90, 110, 180);
-    // Goal
+    ctx.strokeRect(FIELD.x, H / 2 - 90, 110, 180);
     ctx.fillStyle = "rgba(255,255,255,0.25)";
-    ctx.fillRect(FIELD.x + FIELD.w - 6, H / 2 - 52, 14, 104);
+    ctx.fillRect(GOAL_X, H / 2 - 52, 14, 104);
     ctx.strokeStyle = "#fff";
-    ctx.strokeRect(FIELD.x + FIELD.w - 6, H / 2 - 52, 14, 104);
+    ctx.strokeRect(GOAL_X, H / 2 - 52, 14, 104);
   }
 
-  function drawPlayer(p, color, isKeeper) {
-    ctx.fillStyle = color;
+  function drawPerson(p, shirt, isKeeper) {
+    ctx.fillStyle = "rgba(0,0,0,.2)";
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y + p.r - 2, p.r * 0.8, p.r * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = shirt;
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
     ctx.fill();
@@ -283,10 +335,17 @@
 
   function render() {
     drawField();
-    drawPlayer(keeper, "#ffc091", true);
-    drawPlayer(player, "#38c8ff", false);
 
-    // Ball
+    defenders.forEach(function (d) { drawPerson(d, "#d03238", false); });
+    drawPerson(keeper, "#ffc091", true);
+    drawPerson(teammate, "#9fe870", false);
+    drawPerson(player, "#38c8ff", false);
+
+    if (tackleFlash > 0) {
+      ctx.fillStyle = "rgba(208,50,56," + Math.min(0.4, tackleFlash) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
+
     ctx.fillStyle = "#f4f4f4";
     ctx.beginPath();
     ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
