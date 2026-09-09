@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en" data-game="chrono-rift"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chrono Rift</title><link rel="stylesheet" href="../_shared/expedition.css"></head>
+<body>
+<header class="topbar"><div class="brand">CHRONO <i>RIFT</i></div><div class="metrics"><span>SECTOR<b id="sector">01 / 05</b></span><span>HULL<b id="hull">100</b></span><span>FLUX<b id="flux">0</b></span><span>SCORE<b id="score">0</b></span></div><button id="pause" aria-label="Pause game">Ⅱ</button><button id="sound" aria-label="Toggle sound">Sound on</button></header>
+<main class="stage"><canvas id="field" aria-label="Chrono Rift arena. Move with WASD or arrows; auto-fire targets the nearest enemy. Space dashes and R rewinds."></canvas></main>
+<footer class="toolbar"><span class="desktop-hint">WASD / arrows · auto-fire · mouse to aim</span><button id="dash">Space · Dash</button><button id="rewind">R · Rewind</button></footer>
+<div class="touch-controls"><div class="pad"><button data-key="up" aria-label="Move up">↑</button><button data-key="left" aria-label="Move left">←</button><button data-key="down" aria-label="Move down">↓</button><button data-key="right" aria-label="Move right">→</button></div></div>
+<section class="overlay" id="overlay"><div class="sheet" id="sheet"></div></section>
+<script src="../_shared/playpit.js"></script><script src="game.js"></script></body></html>

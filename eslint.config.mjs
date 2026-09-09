@@ -15,6 +15,8 @@ const eslintConfig = defineConfig([
     // The bundled games are standalone ES5 files with their own conventions;
     // they are not part of the app's module graph.
     "public/games/**",
+    // Browser-game regression tests run directly under Node's test runner.
+    "tests/**",
   ]),
 ]);
 
