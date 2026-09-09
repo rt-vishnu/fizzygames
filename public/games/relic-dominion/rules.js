@@ -1,0 +1,46 @@
+/* Pure combat rules shared by the browser and regression tests. */
+(function(root){
+"use strict";
+const CARDS={
+ strike:{name:"Sunstrike",cost:1,type:"attack",icon:"✧",damage:8,text:"Deal {damage} damage."},
+ guard:{name:"Ward",cost:1,type:"skill",icon:"⬡",block:7,text:"Gain {block} block."},
+ spark:{name:"Ember",cost:0,type:"attack",icon:"⌁",damage:4,text:"Deal {damage} damage."},
+ focus:{name:"Foresight",cost:0,type:"skill",icon:"◉",draw:2,exhaust:true,text:"Draw {draw} cards. Exhaust."},
+ venom:{name:"Nightthorn",cost:1,type:"attack",icon:"❋",damage:6,poison:4,text:"Deal {damage} damage. Apply {poison} poison."},
+ wave:{name:"Solar tide",cost:2,type:"attack",icon:"≋",damage:12,all:true,text:"Deal {damage} damage to ALL enemies."},
+ crush:{name:"Sundering",cost:2,type:"attack",icon:"⋈",damage:17,vulnerable:2,text:"Deal {damage} damage. Apply 2 vulnerable (50% more damage)."},
+ barrier:{name:"Moonshield",cost:1,type:"skill",icon:"☽",block:13,text:"Gain {block} block."},
+ siphon:{name:"Soul harvest",cost:2,type:"attack",icon:"♧",damage:13,heal:5,text:"Deal {damage} damage. Heal {heal} vitality."},
+ flurry:{name:"Blade dance",cost:1,type:"attack",icon:"⋔",damage:4,hits:3,text:"Deal {damage} damage three times."},
+ forecast:{name:"Read the stars",cost:1,type:"skill",icon:"✵",block:5,draw:2,text:"Gain {block} block. Draw {draw} cards."},
+ catalyst:{name:"Black bloom",cost:1,type:"skill",icon:"✺",catalyst:2,target:true,text:"Double the target's poison. Upgraded: triple it."},
+ fortify:{name:"Living stone",cost:1,type:"power",icon:"▣",armor:4,exhaust:true,text:"Gain {armor} block at the start of EVERY turn. Exhaust."},
+ charge:{name:"Blood pact",cost:0,type:"skill",icon:"♦",energy:2,self:4,exhaust:true,text:"Lose 4 vitality. Gain {energy} aether. Exhaust."},
+ execute:{name:"Eclipse",cost:2,type:"attack",icon:"◒",damage:20,execute:true,text:"Deal {damage} damage. Double if target is below half vitality."},
+ fold:{name:"Borrowed time",cost:2,type:"skill",icon:"⌛",block:18,next:1,text:"Gain {block} block and 1 extra aether next turn."},
+ resonance:{name:"Awaken",cost:1,type:"power",icon:"☀",power:3,exhaust:true,text:"All your attacks deal {power} extra damage for this battle. Exhaust."},
+ disarm:{name:"Dusk blade",cost:1,type:"attack",icon:"†",damage:7,weak:2,text:"Deal {damage} damage. Apply 2 weak (25% less attack damage)."}
+};
+const RELICS={battery:{name:"Aether heart",icon:"♦",text:"+1 aether on the first turn."},thorns:{name:"Briar crown",icon:"♛",text:"Return 3 damage whenever attacked."},leech:{name:"Verdant chalice",icon:"♧",text:"Heal 5 vitality after every victory."},coil:{name:"Sun prism",icon:"✧",text:"Your first attack each turn deals +4 damage per hit."},lens:{name:"Oracle lens",icon:"◉",text:"Draw 1 extra card each turn."},anchor:{name:"Stone oath",icon:"⬡",text:"Start each battle with 5 permanent armor."}};
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+function card(c){const base={...CARDS[c.id]};if(c.plus){for(const k of ["damage","block"])if(base[k])base[k]+=3;for(const k of ["poison","heal","armor","power"])if(base[k])base[k]+=2;if(base.draw)base.draw++;if(base.energy)base.energy++;if(base.catalyst)base.catalyst=3;}base.name+=c.plus?" +":"";base.text=base.text.replace(/\{(\w+)\}/g,(_,k)=>base[k]);return base;}
+function newRun(){return{version:1,hp:72,maxHp:72,gold:0,depth:0,score:0,kills:0,deck:[...Array.from({length:4},()=>({id:"strike",plus:false})),...Array.from({length:4},()=>({id:"guard",plus:false})),{id:"spark",plus:false},{id:"focus",plus:false}],relics:["battery"],phase:"route",log:[],battle:null,offer:[],elite:false,reported:false};}
+function log(r,s){r.log.push(s);r.log=r.log.slice(-5);}
+function draw(b,n){for(let i=0;i<n&&b.hand.length<10;i++){if(!b.draw.length)b.draw=shuffle(b.discard.splice(0));if(!b.draw.length)break;b.hand.push(b.draw.pop());}}
+function enemy(name,hp,kind,act){return{name,hp,maxHp:hp,kind,act,block:0,poison:0,weak:0,vulnerable:0,turn:0,intent:null};}
+function intent(e){const n=e.turn,bonus=(e.act-1)*2;if(e.kind==="boss"){const cycle=n%3;return cycle===0?{type:"attack",amount:8+bonus,hits:2}:cycle===1?{type:"guard",amount:15+bonus,power:3}:{type:"attack",amount:19+bonus,hits:1};}if(e.kind==="warden"&&n%3===0)return{type:"guard",amount:10+bonus,power:2};if(e.kind==="seer"&&n%3===1)return{type:"hex",amount:3+e.act};return{type:"attack",amount:(e.kind==="stalker"?5:e.kind==="warden"?12:8)+bonus,hits:e.kind==="stalker"?2:1};}
+function begin(r,elite=false){r.elite=elite;const act=Math.floor(r.depth/3)+1,boss=r.depth%3===2;let enemies;if(boss)enemies=[enemy(["The Hollow King","The Ash Oracle","The Star Devourer"][act-1],85+act*30,"boss",act)];else if(elite)enemies=[enemy("Obsidian Warden",50+act*12,"warden",act),enemy("Thorn Stalker",24+act*8,"stalker",act)];else enemies=r.depth===0?[enemy("Thorn Stalker",30,"stalker",1)]:[enemy("Dusk Seer",24+act*8,"seer",act),enemy("Thorn Stalker",22+act*7,"stalker",act)];enemies.forEach(e=>e.intent=intent(e));r.battle={enemies,draw:shuffle(r.deck.map(c=>({...c}))),discard:[],hand:[],exhaust:[],energy:3+(r.relics.includes("battery")?1:0),next:0,block:r.relics.includes("anchor")?5:0,armor:r.relics.includes("anchor")?5:0,power:0,poison:0,turn:1,attacks:0};draw(r.battle,r.relics.includes("lens")?6:5);r.phase="battle";r.log=[];log(r,"Select an enemy, then play cards. Unused block expires next turn.");}
+function hit(target,amount){const shield=Math.min(target.block,amount);target.block-=shield;const actual=amount-shield;target.hp=Math.max(0,target.hp-actual);return actual;}
+function check(r){if(r.hp<=0){r.hp=0;r.phase="lost";log(r,"The expedition falls silent.");return true;}if(r.battle.enemies.every(e=>e.hp<=0)){const boss=r.depth%3===2;r.score+=boss?600:r.elite?350:180;r.gold+=boss?80:r.elite?55:30;r.kills+=r.battle.enemies.length;if(r.relics.includes("leech"))r.hp=Math.min(r.maxHp,r.hp+5);r.phase="reward";r.offer=shuffle(Object.keys(CARDS).filter(k=>!["strike","guard"].includes(k))).slice(0,3);r.rewardRelic=null;if(boss||r.elite){const relic=shuffle(Object.keys(RELICS).filter(k=>!r.relics.includes(k)))[0];if(relic){r.relics.push(relic);r.rewardRelic=relic;}}log(r,"Victory. Choose a card for your deck, or keep it lean.");return true;}return false;}
+function play(r,index,targetIndex){if(r.phase!=="battle")return false;const b=r.battle,c=b.hand[index];if(!c)return false;const d=card(c),target=b.enemies[targetIndex];if(d.cost>b.energy)return false;if((d.type==="attack"||d.target)&&(!target||target.hp<=0))return false;b.energy-=d.cost;b.hand.splice(index,1);if(d.self)r.hp=Math.max(0,r.hp-d.self);if(r.hp<=0){check(r);return true;}
+  if(d.damage){const victims=d.all?b.enemies.filter(e=>e.hp>0):[target];for(const e of victims){const execute=d.execute&&e.hp<e.maxHp/2?2:1;const boost=b.attacks===0&&r.relics.includes("coil")?4:0;for(let i=0;i<(d.hits||1);i++)hit(e,Math.floor((d.damage+b.power+boost)*execute*(e.vulnerable>0?1.5:1)));}b.attacks++;}
+  if(target){for(const k of ["poison","vulnerable","weak"])if(d[k])target[k]+=d[k];if(d.catalyst)target.poison*=d.catalyst;}
+  if(d.block)b.block+=d.block;if(d.heal)r.hp=Math.min(r.maxHp,r.hp+d.heal);if(d.armor)b.armor+=d.armor;if(d.power)b.power+=d.power;if(d.next)b.next+=d.next;if(d.energy)b.energy+=d.energy;(d.exhaust?b.exhaust:b.discard).push(c);if(d.draw)draw(b,d.draw);log(r,`${d.name}: ${d.text}`);check(r);return true;
+}
+function endTurn(r){if(r.phase!=="battle")return;const b=r.battle;for(const e of b.enemies){if(e.hp<=0)continue;if(e.poison){e.hp=Math.max(0,e.hp-e.poison);e.poison--;}if(e.hp<=0)continue;e.block=0;const a=e.intent;if(a.type==="attack"){for(let i=0;i<a.hits;i++){const n=Math.floor((a.amount+(e.power||0))*(e.weak>0?.75:1)),blocked=Math.min(b.block,n);b.block-=blocked;r.hp=Math.max(0,r.hp-(n-blocked));if(r.relics.includes("thorns"))e.hp=Math.max(0,e.hp-3);if(r.hp<=0)break;}}else if(a.type==="guard"){e.block=a.amount;e.power=(e.power||0)+a.power;}else b.poison+=a.amount;e.turn++;e.intent=intent(e);e.weak=Math.max(0,e.weak-1);e.vulnerable=Math.max(0,e.vulnerable-1);if(r.hp<=0)break;}
+  if(check(r))return;if(b.poison){r.hp=Math.max(0,r.hp-b.poison);b.poison--;if(check(r))return;}b.discard.push(...b.hand);b.hand=[];b.turn++;b.energy=3+b.next;b.next=0;b.attacks=0;b.block=b.armor;draw(b,r.relics.includes("lens")?6:5);log(r,`Turn ${b.turn}. Read enemy intentions before committing your aether.`);
+}
+function claim(r,id){if(r.phase!=="reward")return false;if(id&&!r.offer.includes(id))return false;if(id)r.deck.push({id,plus:false});r.depth++;r.offer=[];if(r.depth>=9){r.phase="won";r.score+=1500+r.hp*10;}else r.phase="route";return true;}
+function camp(r,action,index){if(r.phase!=="camp")return false;if(action==="rest")r.hp=Math.min(r.maxHp,r.hp+25);else if(action==="upgrade"){if(!r.deck[index]||r.deck[index].plus)return false;r.deck[index].plus=true;}else if(action==="remove"){if(r.gold<45||r.deck.length<=5||!r.deck[index])return false;r.gold-=45;r.deck.splice(index,1);}else return false;r.depth++;r.phase="route";return true;}
+const api={CARDS,RELICS,card,newRun,begin,play,endTurn,claim,camp,intent,draw};if(typeof module!=="undefined"&&module.exports)module.exports=api;else root.RelicRules=api;
+})(typeof window!=="undefined"?window:globalThis);
